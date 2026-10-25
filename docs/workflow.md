@@ -19,7 +19,19 @@ itself; check with `brew services list`.
 
 ---
 
-## 2. Main run
+## 2. First time only: train the ML model
+
+```zsh
+caffeinate -i python -m sim.train_ml
+```
+
+Takes about 30 seconds. Builds 40 training trials, trains LightGBM, prints its accuracy next
+to two simple baselines, and saves `models/lgbm_need.txt`. The model file is not in git, so do
+this once after cloning, and again whenever you change anything that affects demand
+(enrollment, visits, dropouts, shipping time). The main run stops with a message if the model
+is missing.
+
+## 2b. Main run
 
 ```zsh
 caffeinate -i python -m sim.run --seeds 200 --reset
@@ -34,19 +46,19 @@ caffeinate -i python -m sim.run --seeds 200 --reset
 
 What it does, for each scenario and each trial:
 1. Builds the trial (sites, patients, visits), adding the scenario's surge or stall if any.
-2. Replays it under each rule (`minmax`, `minmax_tuned`, `forecast`, `schedule`).
+2. Replays it under each rule (`minmax`, `minmax_tuned`, `forecast`, `schedule`, `ml`).
 3. Scores each rule.
 4. Loads everything into Postgres (`irt_sim`).
 
 After each scenario it prints a table: average scores for each rule, and the forecast minus
 tuned min/max difference with its 95% range.
 
-Run time: about 1.75 seconds per trial, so ≈ 6 minutes per scenario, ≈ 18 minutes for all three.
-Database size for all three scenarios: ≈ 8.5 GB.
+Run time: about 3 seconds per trial (5 rules), so ≈ 10 minutes per scenario, ≈ 30 minutes
+for all three. Database size for all three scenarios: ≈ 14 GB.
 
 ---
 
-## 3. Re-tuning min/max
+## 3. Re-tuning min/max and retraining ML
 
 The tuned min/max numbers live in `sim/config.py` as `MINMAX_TUNED`. They were picked for
 the current settings. **Re-tune whenever you change anything about enrollment, visits,
@@ -62,7 +74,9 @@ It takes ~8 minutes, then prints a line like:
 MINMAX_TUNED = {'Asia-Pacific': (10, 15), 'Europe': (6, 8), 'North America': (4, 5)}
 ```
 
-Paste that into `sim/config.py`, run `pytest -q`, then do the main run (section 2).
+Paste that into `sim/config.py`, run `pytest -q`, then do the main run (section 2b).
+
+Retrain the ML model the same way: `caffeinate -i python -m sim.train_ml`.
 
 ---
 
@@ -88,7 +102,7 @@ psql irt_sim
 | `inventory_week` | trial, rule, site, arm, week | Received, needed, handed out, short, expired, ordered, on hand, in transit |
 | `policy_result` | trial, rule | The scores (see `how_it_works.md` section 6) |
 
-`policy` in the tables = the reorder rule: `minmax`, `minmax_tuned`, `forecast`, `schedule`.
+`policy` in the tables = the reorder rule: `minmax`, `minmax_tuned`, `forecast`, `schedule`, `ml`.
 
 **Trial ids:** `trial_id` = scenario number × 100000 + seed. Base trials are 0–199, surge
 100000–100199, stall 200000–200199. Seed 7 is the same underlying trial in all three
@@ -138,8 +152,8 @@ FROM inventory_week WHERE trial_id = 0 AND site_id = 1 ORDER BY policy, arm, wee
 1. Edit the value in `sim/config.py` (every setting is there, with a comment).
 2. Add or update the matching line in `docs/assumptions.md`.
 3. `pytest -q`.
-4. If it affects demand, shipping, or the forecast rule: re-tune (section 3).
-5. Main run (section 2). Use `--reset` if `sql/schema.sql` changed.
+4. If it affects demand, shipping, or the forecast rule: re-tune min/max and retrain ML (section 3).
+5. Main run (section 2b). Use `--reset` if `sql/schema.sql` changed.
 
 ---
 
@@ -153,6 +167,9 @@ FROM inventory_week WHERE trial_id = 0 AND site_id = 1 ORDER BY policy, arm, wee
 | `sim/policies/` | The reorder rules |
 | `sim/metrics.py` | Scores and rule-vs-rule comparison |
 | `sim/tune_minmax.py` | Picks tuned min/max settings |
+| `sim/ml.py` | Builds ML inputs (features) and predictions |
+| `sim/train_ml.py` | Trains and saves the LightGBM model |
+| `models/` | Saved ML model (not in git) |
 | `sim/run.py` | Main run: generate, replay, score, load |
 | `sim/db.py` | Creates tables, bulk-loads data |
 | `sql/schema.sql` | Table definitions |
@@ -170,6 +187,8 @@ FROM inventory_week WHERE trial_id = 0 AND site_id = 1 ORDER BY policy, arm, wee
 | `psql: command not found` | `source ~/.zshrc` (or open a new terminal tab) |
 | `ModuleNotFoundError` | Environment not on: `source .venv/bin/activate` |
 | Can't connect to database | `brew services restart postgresql@16` |
+| `No ML model at models/lgbm_need.txt` | `python -m sim.train_ml` (section 2) |
+| LightGBM import error about `libomp` | `brew install libomp` |
 | Run is very slow | Mac went to sleep: use `caffeinate -i` (section 2) |
 | Errors about missing columns after a code update | Table layout changed: add `--reset` |
 | pgAdmin asks for user `postgres` | There is none; use your Mac login name (see README) |

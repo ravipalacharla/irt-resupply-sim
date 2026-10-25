@@ -74,6 +74,26 @@ FORECAST_FLOOR = 2          # keep at least this many while enrollment is open (
 SCHEDULE_LOOKAHEAD_WEEKS = 8      # how far ahead the simulator lists scheduled visits
 SCHEDULE_ENROLL_WINDOW_WEEKS = 8  # recent weeks used to estimate the site's new-patient rate
 
+# --- ML (LightGBM) reorder rule ---
+# Trained by `python -m sim.train_ml` on its own trials (base scenario only), never on the
+# tuning (10000+) or scoring (0..N-1) trials. Not retrained for scenarios or knobs.
+TRAINING_SEED_START = 20_000
+TRAINING_TRIALS = 40              # last 8 of these are held out to decide when to stop training
+ML_MODEL_PATH = "models/lgbm_need.txt"
+ML_PARAMS = {
+    "objective": "poisson",       # predicts counts (kits per week); never negative
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_data_in_leaf": 200,
+    "feature_fraction": 0.9,
+    "seed": SEED,
+    "deterministic": True,        # same data + seed -> same model
+    "force_row_wise": True,
+    "verbose": -1,
+}
+ML_MAX_ROUNDS = 2000
+ML_EARLY_STOP_ROUNDS = 50         # stop when held-out error has not improved for this many rounds
+
 
 # --- Stress-test scenarios: enrollment shocks the rules were not set up for ---
 # share = fraction of sites hit; factor = pace multiplier while hit; weeks = how long.

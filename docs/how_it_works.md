@@ -14,7 +14,7 @@ step, see `docs/assumptions.md`. For how to run things, see `docs/workflow.md`.
 | Min/max reorder rules | Built | `sim/policies/minmax.py`, `minmax_tuned.py`, section 5 | Fixed reorder trigger and refill level (plain arithmetic). |
 | Rolling-average forecast rule | Built | `sim/policies/forecast.py`, section 5 | Recent average use + standard safety-stock formula (plain arithmetic). |
 | Schedule-based forecast rule | Built | `sim/policies/schedule.py`, section 5 | Known visit dates of patients on treatment + spare kits for new patients (plain arithmetic). The baseline ML must beat. |
-| **Gradient-boosted trees (LightGBM)** | Planned | | Machine-learning forecast of weekly kit need, used inside a reorder rule and tested with the same Monte Carlo runs. |
+| **Gradient-boosted trees (LightGBM)** | Built | `sim/ml.py`, `sim/train_ml.py`, `sim/policies/ml.py`, section 5 | Machine-learning forecast of weekly kit need, used inside a reorder rule and tested with the same Monte Carlo runs. |
 
 Monte Carlo and ML are not alternatives: Monte Carlo is the test track, and each reorder rule
 (including the ML one) is a driver tested on it.
@@ -65,10 +65,11 @@ replayed under each rule. We run 200 of them per scenario. The 95% ranges in the
 from how much the outcome varies across those 200 trials.
 
 ### Is this machine learning?
-No, not yet. All four rules built so far are arithmetic: comparing counts to fixed numbers
-(min/max), an average of recent weeks plus a standard safety-stock formula (forecast), or
-known visits plus spare kits (schedule). Nothing is trained. "Tuning" min/max means trying 80
-combinations and keeping the best one. Machine learning (LightGBM) is the next rule to be built.
+One rule is. Four rules are plain arithmetic: comparing counts to fixed numbers (min/max), an
+average of recent weeks plus a standard safety-stock formula (forecast), or known visits plus
+spare kits (schedule). "Tuning" min/max means trying 80 combinations and keeping the best one;
+nothing is trained. The fifth rule (ML) uses a LightGBM model trained on separate made-up
+trials to predict how many kits each site will need (Rule 5 in section 5).
 
 ---
 
@@ -176,6 +177,7 @@ position it is aiming for). The target is saved each week for the dashboard.
 | Tuned min/max | `minmax_tuned.py` | North America 4/5, Europe 6/8, Asia-Pacific 10/15 (`MINMAX_TUNED`) |
 | Forecast | `forecast.py` | Look back 8 weeks, cushion 1.65, floor 2 while enrolling |
 | Schedule | `schedule.py` | Visits due in next (shipping + 1) weeks, + spare kits for new patients (cushion 1.65, at least 2 while enrolling) |
+| ML | `ml.py` | LightGBM-predicted need over next (shipping + 1) weeks, same spare-kit logic as Schedule (`ML_PARAMS`) |
 
 All rules also follow two shared rules from the supply side (section 4): start one shipping
 time before the site opens, and stop once enrollment is closed and the site has nobody on
@@ -306,9 +308,84 @@ kits to patients who are about to finish (far fewer kits left at the end).
 **Weakness:** it assumes every patient keeps going, so it slightly over-orders for patients
 who will drop out. It needs patient-level data, which simple min/max does not.
 
+### Rule 5: ML (LightGBM)
+
+**In words:** a machine-learning model predicts how many kits this site and arm will need in
+each of the next few weeks. The rule then orders exactly like the schedule rule, but using the
+model's prediction instead of a plain count of booked visits.
+
+**What LightGBM is:** "gradient-boosted trees". It builds hundreds of small decision trees
+("if scheduled visits next week is 2 and the site enrolled someone in the last month, then...").
+Each new tree corrects the mistakes of the ones before. It is the most widely proven ML method
+for this kind of demand data: it won the M5 forecasting competition (Walmart retail, mostly
+"lumpy" demand of 0s, 1s, and 2s) and is common in commercial demand forecasting.
+
+**What it predicts:** kits needed at a site, for one arm, *h* weeks from now (h = 1 to 8).
+One model covers every site, arm, and look-ahead week.
+
+**What it can use** (only facts known at the current week; a test checks this):
+
+| Input | Meaning |
+|---|---|
+| Scheduled kits in week h, and over the next 8 weeks | Known visits of patients on treatment now |
+| Kits needed last week, average over last 4 / 8 / 16 weeks | Recent use at this site and arm |
+| Patients enrolled per week, average over last 4 / 8 / 16 weeks; total so far | Recent and overall enrollment at this site |
+| Patients on treatment at the site, and in this arm | Current load |
+| Share of the trial's 500-patient target reached so far | How close enrollment is to closing |
+| Weeks since the site opened; enrollment open or closed | Site and trial stage |
+| Shipping time, region, arm, look-ahead week h | Context |
+
+**How it was trained** (`python -m sim.train_ml`):
+1. Make 40 training trials, separate from the scoring trials (0-199) and the min/max tuning
+   trials (10000+). Base scenario only.
+2. For every site, arm, week, and look-ahead week, record the inputs above and what actually
+   happened h weeks later. About 6.5 million examples.
+3. Train on 32 trials; keep 8 aside. Keep adding trees until the error on those 8 stops
+   improving ("early stopping"), so the model learns patterns rather than memorising.
+4. Save the model to `models/lgbm_need.txt` (not stored in git; re-create it with step 1).
+
+The model is never retrained for the stress scenarios or dashboard knobs. Like tuned min/max,
+it is tested on conditions it was not set up for.
+
+**How it orders:**
+
+```
+cover     = shipping weeks + 1
+expected  = model's predicted need over the next `cover` weeks
+scheduled = kits due for patients on treatment now
+booked    = the smaller of expected and scheduled   (lets the model allow for likely dropouts)
+new       = expected - booked                       (the model's expected new-patient kits)
+spare     = new + 1.65 x sqrt(new), at least 2 while enrolling; 0 once enrollment closes
+target    = booked + spare, rounded up
+order     = target - position, if position < target; otherwise 0
+```
+
+This mirrors the schedule rule on purpose: the only difference is where the forecast comes
+from, so any difference in results is down to the model.
+
+**Forecast accuracy** on the 8 held-out training trials (lower is better):
+
+| Method | Poisson deviance |
+|---|---|
+| LightGBM | **0.16** |
+| Scheduled visits only | 0.94 |
+| Rolling 8-week average | 0.85 |
+
+Poisson deviance is the standard error measure for count forecasts. LightGBM is far more
+accurate as a forecast. Scheduled visits account for 87% of what the model learned (its
+"gain"); on top of that it learns corrections: likely dropouts, new patients from enrollment
+trends, and the approach of enrollment closing.
+
+**But accuracy is not the goal; stockouts and waste are.** See section 7 for how that turns
+into supply results.
+
+**A design fix worth keeping:** the first version kept adding spare kits after enrollment had
+closed (from the model's tiny leftover new-patient prediction), which left about 75 extra kits
+per trial at sites at the end. The schedule rule adds no spare kits once enrollment closes;
+the ML rule was changed to match. Found on tuning trials, not scoring trials.
+
 ### Ideas not built (kept for discussion)
 - **Fewer, bigger forecast shipments:** only ship when at least N kits are needed.
-- **Machine learning (LightGBM):** learn the forecast from data. Next to be built (it must beat the schedule rule to count as a win).
 
 ## 6. Scoring and comparing (`sim/metrics.py`)
 
@@ -332,14 +409,14 @@ zero, the difference is real, not luck of the draw.
 
 ## 7. Results so far (200 trials, per trial averages)
 
-| | Min/max | Tuned min/max | Forecast | Schedule |
-|---|---|---|---|---|
-| Kits short | 296 | 8.2 | 7.7 | **2.7** |
-| Kits expired | 264 | 552 | **107** | 112 |
-| Kits left at end | 555 | 1,099 | 323 | **83** |
-| Kits shipped | 6,450 | 7,570 | 6,350 | **6,120** |
-| Shipments | **1,625** | 2,445 | 3,519 | 3,461 |
-| Avg kits at sites | 484 | 984 | 296 | **220** |
+| | Min/max | Tuned min/max | Forecast | Schedule | ML |
+|---|---|---|---|---|---|
+| Kits short | 296 | 8.2 | 7.7 | **2.7** | 3.3 |
+| Kits expired | 264 | 552 | **107** | 112 | 112 |
+| Kits left at end | 555 | 1,099 | 323 | 83 | **82** |
+| Kits shipped | 6,450 | 7,570 | 6,350 | 6,120 | **6,119** |
+| Shipments | **1,625** | 2,445 | 3,519 | 3,461 | 3,485 |
+| Avg kits at sites | 484 | 984 | 296 | 220 | **217** |
 
 Differences vs tuned min/max, with 95% ranges, are printed by `python -m sim.run`.
 
@@ -352,8 +429,40 @@ Differences vs tuned min/max, with 95% ranges, are printed by `python -m sim.run
   forecast (95% range excludes zero). It also holds the least stock, ships the fewest kits,
   and leaves the fewest kits behind, because it knows which patients are near the end of
   treatment. Its expired kits are about the same as forecast.
-- Both forecast-type rules send about 40% more boxes than tuned min/max. Which matters more,
-  kits or boxes, depends on drug cost vs shipping cost, which this project does not model.
+- The ML rule lands almost exactly on the schedule rule, but slightly worse on stockouts:
+  +0.66 kits short per trial (95% range +0.54 to +0.78), with 1.4% less stock and 0.7% more
+  boxes. See "Did ML win?" below.
+- All three forecast-type rules send about 40% more boxes than tuned min/max. Which matters
+  more, kits or boxes, depends on drug cost vs shipping cost, which this project does not model.
+
+### Did ML win?
+
+**No.** On these trials, the ML rule does not beat the plain-math schedule rule. It is a far
+better *forecast* (Poisson deviance 0.16 vs 0.94), but that does not turn into fewer stockouts:
+
+| ML minus schedule | Base | Stall | Surge |
+|---|---|---|---|
+| Kits short per trial | +0.66 | +0.70 | +1.55 |
+| 95% range | +0.54 to +0.78 | +0.57 to +0.84 | +1.33 to +1.77 |
+| Avg kits at sites | -3.1 (-1.4%) | -3.1 (-1.3%) | -3.7 (-1.8%) |
+
+Why, in plain terms:
+1. **Most demand is already known.** 87% of what the model learned comes from the visit
+   schedule, which the schedule rule uses directly. There is little left for ML to add.
+2. **Better average, thinner cushion.** The model correctly expects some patients to drop out,
+   so it books slightly fewer kits. But when a patient it expected to drop out shows up anyway,
+   the site is a kit short. Being right on average is not the same as covering the bad weeks.
+3. **Surges hurt it most** (+1.55): it was trained only on normal enrollment and never saw a
+   surge, so it under-predicts new patients during one.
+
+What this does and does not show:
+- It shows that a schedule-aware rule with a sensible cushion is very hard to beat, and that
+  forecast accuracy alone is the wrong yardstick for resupply.
+- It does not show ML is useless. ML holds slightly less stock, so a fair verdict compares the
+  two at *equal* stock levels. The dashboard's safety-level knob (low / normal / high) will
+  show both rules' full trade-off curves, which answers that properly.
+- Real enrollment and dropout patterns are messier than our generator. ML could matter more
+  there, and less (circular validation, scope section 9).
 
 **Known caveat:** the forecast rule learns from demand made by our own generator, so it may
 look better here than it would on messier real-world enrollment. The stress test (section 8)
@@ -383,17 +492,17 @@ no rule was set up for:
 
 ### Results (200 trials per scenario, per trial averages)
 
-| | Scenario | Min/max | Tuned min/max | Forecast | Schedule |
-|---|---|---|---|---|---|
-| Kits short | base | 296 | 8.2 | 7.7 | 2.7 |
-| | surge | 344 | 14.1 | 10.6 | 3.8 |
-| | stall | 291 | 9.3 | 8.0 | 2.9 |
-| Kits expired | base | 264 | 552 | 107 | 112 |
-| | surge | 267 | 556 | 111 | 117 |
-| | stall | 273 | 571 | 109 | 114 |
-| Shipments | base | 1,625 | 2,445 | 3,519 | 3,461 |
-| | surge | 1,616 | 2,427 | 3,477 | 3,421 |
-| | stall | 1,600 | 2,408 | 3,465 | 3,402 |
+| | Scenario | Min/max | Tuned min/max | Forecast | Schedule | ML |
+|---|---|---|---|---|---|---|
+| Kits short | base | 296 | 8.2 | 7.7 | 2.7 | 3.3 |
+| | surge | 344 | 14.1 | 10.6 | 3.8 | 5.4 |
+| | stall | 291 | 9.3 | 8.0 | 2.9 | 3.6 |
+| Kits expired | base | 264 | 552 | 107 | 112 | 112 |
+| | surge | 267 | 556 | 111 | 117 | 116 |
+| | stall | 273 | 571 | 109 | 114 | 113 |
+| Shipments | base | 1,625 | 2,445 | 3,519 | 3,461 | 3,485 |
+| | surge | 1,616 | 2,427 | 3,477 | 3,421 | 3,447 |
+| | stall | 1,600 | 2,408 | 3,465 | 3,402 | 3,426 |
 
 At the shocked sites only, during the shock and 8 weeks after:
 

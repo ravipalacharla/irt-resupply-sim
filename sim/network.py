@@ -90,6 +90,8 @@ def simulate_supply(trial, policy):
     demand = demand_by_site_arm(trial)
     on_treatment = patients_on_treatment(trial)
     schedule = scheduled_kits(trial)
+    # Rules may precompute per-trial inputs in one batch (the ML rule's predictions).
+    prepared = policy.prepare(trial) if hasattr(policy, "prepare") else {}
     enrolled = trial["site_week"].pivot(index="site_id", columns="week", values="enrolled")
     no_demand = np.zeros(c.TRIAL_WEEKS, dtype=int)
     no_patients = np.zeros(c.TRIAL_WEEKS, dtype=int)
@@ -109,6 +111,7 @@ def simulate_supply(trial, policy):
             arm_lots = lots[lots["arm"] == arm]
             need_by_week = demand.get((s.site_id, arm), no_demand)
             sched = schedule.get((s.site_id, arm), no_schedule)
+            prep = prepared.get((s.site_id, arm), no_schedule)
             on_hand = {}   # lot_id -> kits
             transit = []   # (arrive_week, lot_id, kits)
             for w in range(c.TRIAL_WEEKS):
@@ -149,6 +152,7 @@ def simulate_supply(trial, policy):
                         "enroll_history": site_enrolled[: w + 1],  # site patients enrolled per week so far
                         "scheduled": sched[w],                   # kits due in each of the next weeks
                         "on_treatment": int(active[w]),          # site patients on treatment now
+                        "prepared": prep[w],                     # rule's own precomputed input (ML)
                     }
                     ordered, target = policy.order_qty(sum(on_hand.values()), sum(t[2] for t in transit), known)
                     if ordered > 0:

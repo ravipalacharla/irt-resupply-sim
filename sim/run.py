@@ -6,6 +6,7 @@
 """
 import argparse
 import time
+from pathlib import Path
 
 import pandas as pd
 
@@ -14,9 +15,9 @@ from sim.db import create_schema, get_engine, load_trial
 from sim.generator import generate_trial
 from sim.metrics import compare, summarize
 from sim.network import simulate_supply
-from sim.policies import forecast, minmax, minmax_tuned, schedule
+from sim.policies import forecast, minmax, minmax_tuned, ml, schedule
 
-POLICIES = [minmax, minmax_tuned, forecast, schedule]
+POLICIES = [minmax, minmax_tuned, forecast, schedule, ml]
 SCENARIO_NAMES = list(c.SCENARIOS)
 
 
@@ -55,6 +56,8 @@ def main():
     ap.add_argument("--reset", action="store_true", help="drop and recreate tables")
     args = ap.parse_args()
     assert args.seeds <= c.TUNING_SEED_START, "scoring seeds would overlap the min/max tuning seeds"
+    if not Path(c.ML_MODEL_PATH).exists():
+        raise SystemExit(f"No ML model at {c.ML_MODEL_PATH}. Train it first:  python -m sim.train_ml")
 
     engine = get_engine()
     create_schema(engine, reset=args.reset)

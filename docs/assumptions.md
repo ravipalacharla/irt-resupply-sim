@@ -98,3 +98,15 @@ All values are invented or taken from public sources. Each entry says where it c
 | R4 | Spare kits for new patients = expected new + 1.65 x sqrt(expected new) (Poisson spread), at least 2 while enrolling, 0 after enrollment closes. Uses the same cushion (1.65) and floor (2) as the forecast rule, so the two differ in what they know, not how cautious they are. | Design choice |
 | R5 | First version applied the floor to the total target, leaving no spare kit at sites with patients already on treatment (~18 kits short per trial). Changed to apply the floor to spare kits only (~3 short). Found and fixed on tuning trials (seeds 10000+), not scoring trials. | Design iteration |
 | R6 | Tuned min/max was matched to the forecast rule's service level, not the schedule rule's (which is higher). | Limitation |
+
+## ML rule (all in `sim/config.py`)
+
+| # | Assumption | Source |
+|---|---|---|
+| M1 | Model: LightGBM gradient-boosted trees, Poisson objective (predicts counts). Chosen as the most proven ML method for lumpy demand (M5 competition, retail and commercial demand forecasting). | Literature |
+| M2 | Target: kits needed at a site/arm h weeks ahead (h = 1-8). Inputs: only facts known at the current week (scheduled visits, recent use, recent enrollment, patients on treatment, trial progress, site age, shipping time, region, arm). | Design choice (no peeking; tested) |
+| M3 | Trained on 40 separate trials (seeds 20000-20039), base scenario only; 8 held out for early stopping. Never retrained for scenarios or knobs. | Design choice |
+| M4 | Ordering uses the schedule rule's structure (booked + spare kits, floor 2 while enrolling, 0 spare after closing), so results differ only by the forecast. | Design choice (fair comparison) |
+| M5 | Predictions are made in one batch per trial before the weekly loop. Valid because the inputs depend only on the trial, not on shipping decisions. | Implementation (speed) |
+| M6 | First version added spare kits after enrollment closed; changed to 0 to match the schedule rule. Found on tuning trials. | Design iteration |
+| M7 | The model learns patterns of our own generator (circular validation, scope section 9). Any win is "under these assumptions". | Limitation |

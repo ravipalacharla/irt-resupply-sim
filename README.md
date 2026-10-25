@@ -19,8 +19,11 @@ createdb irt_sim
 
 python3 -m venv .venv
 source .venv/bin/activate
+brew install libomp                # needed by LightGBM on macOS
 pip install -r requirements.txt
 pytest -q
+python -m sim.train_ml             # train the ML model once (~30 s)
+caffeinate -i python -m sim.run --seeds 200 --reset
 ```
 
 ## Accessing the database
