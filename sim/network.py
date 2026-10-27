@@ -125,6 +125,13 @@ def simulate_supply(trial, policy):
     p = trial["patient"]
     closed_from = p["enroll_week"].max() + 1 if len(p) >= c.ENROLL_TARGET else c.TRIAL_WEEKS
 
+    # Newest released lot of each arm, for every week (looked up once, not per shipment).
+    newest_lot = {}
+    for arm in c.ARMS:
+        al = lots[lots["arm"] == arm].sort_values("release_week")
+        idx = np.searchsorted(al["release_week"].to_numpy(), np.arange(c.TRIAL_WEEKS), side="right") - 1
+        newest_lot[arm] = al["lot_id"].to_numpy()[np.maximum(idx, 0)]
+
     inv_rows, ship_rows = [], []
     for s in trial["site"].itertuples():
         lead = c.LEAD_TIME_WEEKS[s.region]
@@ -134,7 +141,6 @@ def simulate_supply(trial, policy):
         # Per-arm state. Both arms are stepped through the same week together, so that when
         # one arm orders, the other can be topped up in the same box.
         arms = {arm: {
-            "lots": lots[lots["arm"] == arm],
             "need": demand.get((s.site_id, arm), no_demand),
             "sched": schedule.get((s.site_id, arm), no_schedule),
             "prep": prepared.get((s.site_id, arm), no_schedule),
@@ -199,7 +205,7 @@ def simulate_supply(trial, policy):
                 a = arms[arm]
                 received, need, dispensed, expired, ordered, target, _ = v
                 if ordered > 0:
-                    lot = int(a["lots"].loc[a["lots"]["release_week"] <= w, "lot_id"].max())
+                    lot = int(newest_lot[arm][w])
                     a["transit"].append((w + lead, lot, ordered))
                     ship_rows.append((s.site_id, arm, lot, w, w + lead, ordered))
                 inv_rows.append((s.site_id, arm, w, received, need, dispensed, need - dispensed,

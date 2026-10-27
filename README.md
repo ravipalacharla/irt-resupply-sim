@@ -23,7 +23,8 @@ brew install libomp                # needed by LightGBM on macOS
 pip install -r requirements.txt
 pytest -q
 python -m sim.train_ml             # train the ML model once (~30 s)
-caffeinate -i python -m sim.run --seeds 200 --reset
+caffeinate -s python -m sim.run --seeds 200 --plan dashboard --reset   # plug in, lid open (~5 h)
+python -m sim.export               # dashboard files -> web/data/
 ```
 
 ## Accessing the database

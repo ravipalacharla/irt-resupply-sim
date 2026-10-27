@@ -480,131 +480,162 @@ zero, the difference is real, not luck of the draw.
 
 ## 7. Results (200 trials, per trial averages)
 
-Current model: visit windows, enrollment realism, run to the last visit, both arms in one box.
+These are the numbers behind the dashboard (normal knob settings, no shock). Every rule is
+scored on the same 200 trials. About 6,150 kits are needed per trial.
 
-| | Min/max | Tuned min/max | Forecast | Schedule | Schedule + Bayesian | ML |
+| | Fixed refill | Fixed refill by region | Recent use | Expected visits | Expected visits + site pace | Expected visits + ML |
 |---|---|---|---|---|---|---|
-| Kits short | 293 | 8.2 | 10.3 | **7.1** | 8.0 | 7.8 |
-| Kits expired | 532 | 1,089 | 220 | 189 | **188** | **188** |
-| Kits left at close-out | 378 | 697 | 201 | **30** | **30** | **30** |
-| Kits shipped | 6,757 | 7,918 | 6,551 | 6,352 | **6,351** | **6,351** |
-| Shipments (boxes) | **1,389** | 2,502 | 3,429 | 3,633 | 3,656 | 3,669 |
-| Avg kits at sites | 491 | 985 | 292 | 191 | **189** | **189** |
+| Kits short | 293 | 11.3 | 9.8 | **7.2** | 8.2 | 8.1 |
+| Kits expired | 532 | 1,096 | 219 | 187 | **187** | **187** |
+| Kits left at close-out | 377 | 693 | 200 | **30** | **30** | **30** |
+| Kits shipped | 6,770 | 7,931 | 6,563 | 6,363 | **6,362** | **6,362** |
+| Shipments sent | **1,395** | 2,507 | 3,432 | 3,637 | 3,661 | 3,674 |
+| Kits sitting at sites (avg per week) | 491 | 986 | 292 | 191 | **188** | **188** |
 
-About 6,140 kits are needed per trial. Differences vs tuned min/max, with 95% ranges, are
-printed by `python -m sim.run`.
+(Code names: minmax, minmax_tuned, forecast, schedule, schedule_bayes, ml.)
 
 ### What it says
-- **Plain min/max** runs short a lot (about 5% of kits needed), mostly at busy sites far from
+- **Fixed refill** runs short a lot (about 5% of kits needed), mostly at busy sites far from
   the depot.
-- **Tuned min/max** fixes that by holding about twice the stock, and loses about 1 in 7 kits it
-  ships to expiry (1,089 expired of 7,918 shipped).
-- **The schedule rule matches tuned min/max on stockouts** (7.1 vs 8.2 kits short; the 95%
-  range of the difference, -3.1 to +0.8, includes zero) **with 81% less stock, 83% fewer expired
-  kits, and almost nothing left at close-out** (30 vs 697). It sends about 45% more boxes.
-- **Rolling forecast** sits in between: little stock, but more stockouts than the schedule
-  rule because it only looks backwards.
-- **Schedule + Bayesian and ML** both land almost exactly on the schedule rule, slightly worse
-  on stockouts (see below).
-- All forecast-type rules send far more boxes than min/max. Which matters more, kits or boxes,
-  depends on drug cost vs shipping cost, which this project does not model.
+- **Fixed refill by region** fixes most of that by holding about twice the stock, and loses
+  about 1 in 7 kits it ships to expiry (1,096 of 7,931).
+- **Expected visits** runs short less than Fixed refill by region (7.2 vs 11.3 kits; 95% range
+  of the difference -6.3 to -2.0), **with 81% less stock, 83% fewer expired kits, and almost
+  nothing left at close-out** (30 vs 693). It sends about 45% more shipments.
+- **Recent use** sits in between: little stock, but more shortfalls than Expected visits,
+  because it only looks backwards.
+- **The two "Expected visits +" rules** land almost exactly on Expected visits, slightly
+  worse on shortfalls (see below).
+- Which matters more, kits or shipments, depends on drug cost vs shipping cost, which this
+  project does not model.
+
+**How steady are these numbers?** Each rule's average comes from 200 random trials, so a new
+set of 200 gives slightly different averages. Expected visits stays steady (7.1 and 7.2 kits
+short in two different sets). Fixed refill by region moves more (8.2 and 11.3), because now and
+then it has a trial with a big shortfall. The comparisons between rules are always made on the
+same trials, so they are fair either way.
 
 ### Did ML or the Bayesian rule win?
 
-**No.** Both are very slightly worse than the plain schedule rule on stockouts, with about
-1.4% less stock and the same waste:
+**No.** Both are very slightly worse than plain Expected visits on shortfalls, with about 1.4%
+less stock and the same waste:
 
-| Difference vs schedule rule | Kits short per trial | 95% range | Avg kits at sites |
+| Difference vs Expected visits | Kits short per trial | 95% range | Kits at sites |
 |---|---|---|---|
-| ML, base | +0.71 | +0.55 to +0.87 | -2.5 |
-| ML, surge | +1.60 | +1.35 to +1.86 | -3.1 |
-| Schedule + Bayesian, base | +0.89 | +0.74 to +1.04 | -2.6 |
-| Schedule + Bayesian, surge | +1.73 | +1.50 to +1.96 | -3.1 |
+| + ML, no shock | +0.84 | +0.68 to +1.01 | -2.5 |
+| + ML, surge | +2.02 | +1.71 to +2.33 | -3.2 |
+| + site pace (Bayesian), no shock | +1.00 | +0.84 to +1.15 | -2.6 |
+| + site pace (Bayesian), surge | +1.99 | +1.74 to +2.24 | -3.1 |
 
 Why, in plain terms:
 1. **Most demand is already known.** Most kits go to patients already on treatment, on planned
-   visits. The schedule rule uses that directly. ML and the Bayesian model only improve the
-   small remaining part (new patients, dropouts).
-2. **The floor of 2 spare kits makes most of the decisions.** At most sites, all three rules
-   end up keeping the same 2 spare kits, so their better estimates rarely change an order.
+   visits. Expected visits uses that directly. ML and the Bayesian model only improve the small
+   remaining part (new patients, dropouts).
+2. **The floor of 2 spare kits makes most of the decisions.** At most sites all three rules
+   keep the same 2 spare kits, so better estimates rarely change an order.
 3. **Better average, thinner cushion.** ML expects some patients to drop out, and the Bayesian
-   model often expects fewer new patients than the simpler rule's cushion allows for. Both
-   therefore hold slightly less stock, and occasionally that is one kit too few.
-4. **Surges hurt them most.** Neither was set up for a surge: ML never saw one in training,
-   and the Bayesian model assumes each site has a steady pace.
+   model often expects fewer new patients than the simpler rule allows for. Both hold slightly
+   less stock, and occasionally that is one kit too few.
+4. **Surges hurt them most.** ML never saw one in training; the Bayesian model assumes each
+   site has a steady pace.
 
 What this does and does not show:
-- It shows a schedule-aware rule with a sensible cushion is very hard to beat, and that a more
-  accurate forecast is not the same as fewer stockouts.
+- A rule that counts expected visits and keeps a sensible cushion is very hard to beat, and a
+  more accurate forecast is not the same as fewer shortfalls.
 - It does not show ML or Bayesian methods are useless. They hold slightly less stock, so the
-  fair verdict compares the rules at *equal* stock. The dashboard's safety-level knob will
-  show each rule's full trade-off line, which answers that properly.
-- With real data the picture could change (see `docs/real_world_blueprint.md`, not in git):
-  site history across many trials gives the Bayesian model a much better prior than one
-  pooled guess, and dropout patterns are richer than our generator's.
+  fair test compares rules at *equal* stock. The safety knob (section 8b) shows that.
+- With real data the picture could change (see `docs/real_world_blueprint.md`, not in git).
 
 ### What changed when the model got more realistic
-Before visit windows, enrollment realism, and running to the last visit, the schedule rule
-looked much stronger: about a third of tuned min/max's stockouts (2.7 vs 8.2 kits short).
-With realistic visits it is level on stockouts instead. Its stock and waste advantage held up,
-and grew once close-out was counted (tuned min/max leaves about 700 kits at sites at the end).
-The earlier numbers overstated the schedule rule, as expected.
+Before visit windows, enrollment realism, and running to the last visit, Expected visits had
+about a third of Fixed refill by region's shortfalls (2.7 vs 8.2). With realistic visits the gap
+is smaller, and it varies between sets of trials (section above). Its stock and waste advantage
+held up, and grew once close-out was counted.
 
 **Known caveat:** all rules are tested on data from our own generator, so results hold
 "under these assumptions" (scope section 9).
 
 ---
 
-## 8. Stress test: surges and stalls
+## 8. Stress test and knobs
 
-### What
-Real enrollment does not follow a smooth pattern. On top of the built-in realism (section 3),
-the same 200 trials are hit with shocks that no rule was set up for:
+### 8a. Surges and stalls
 
 | Scenario | What happens |
 |---|---|
-| Base | No shock (the results in section 7). |
+| No shock | The results in section 7. |
 | Surge | 30% of sites suddenly enroll at 3x their pace for 12 weeks. |
 | Stall | 30% of sites suddenly enroll nobody for 16 weeks, then carry on. |
 
-### How
-- The shock hits all chosen sites in the same week, somewhere between weeks 26 and 70.
-- A shocked trial is the base trial with the same seed plus the shock, so "surge trial 7" vs
-  "base trial 7" isolates the shock.
-- No rule is re-tuned or retrained.
+The shock hits all chosen sites in the same week (between weeks 26 and 70). A shocked trial is
+the no-shock trial with the same seed plus the shock. No rule is re-tuned or retrained.
 
-### Results (per trial averages)
+| Kits short per trial | Fixed refill | Fixed refill by region | Recent use | Expected visits | + site pace | + ML |
+|---|---|---|---|---|---|---|
+| No shock | 293 | 11.3 | 9.8 | **7.2** | 8.2 | 8.1 |
+| Surge | 329 | 16.5 | 14.4 | **8.8** | 10.8 | 10.9 |
+| Stall | 299 | 10.3 | 10.1 | **7.2** | 8.3 | 8.1 |
 
-| | Scenario | Min/max | Tuned min/max | Forecast | Schedule | Sched. + Bayes | ML |
-|---|---|---|---|---|---|---|---|
-| Kits short | base | 293 | 8.2 | 10.3 | 7.1 | 8.0 | 7.8 |
-| | surge | 320 | 12.4 | 13.4 | **8.3** | 10.0 | 9.9 |
-| | stall | 301 | 10.9 | 10.5 | **7.2** | 8.2 | 8.1 |
-| Kits expired | base | 532 | 1,089 | 220 | 189 | 188 | 188 |
-| | surge | 483 | 990 | 200 | 169 | 168 | 168 |
-| | stall | 575 | 1,178 | 238 | 204 | 204 | 204 |
-| Shipments | base | 1,389 | 2,502 | 3,429 | 3,633 | 3,656 | 3,669 |
-| | surge | 1,371 | 2,458 | 3,354 | 3,542 | 3,568 | 3,581 |
-| | stall | 1,399 | 2,520 | 3,453 | 3,660 | 3,684 | 3,696 |
+- **In a surge, Expected visits holds up best:** 8.8 vs 16.5 kits short for Fixed refill by
+  region (95% range of the difference -11.4 to -3.9).
+- Stalls barely hurt anyone: a site that stops enrolling still has stock for its patients.
+  Waste goes up slightly instead.
+- Expired kits and stock follow the same pattern as section 7 in every scenario.
 
-At the shocked sites only, during the shock and 8 weeks after:
+### 8b. Knobs: what if conditions change?
 
-| | Kits needed | Min/max | Tuned min/max | Forecast | Schedule | Sched. + Bayes | ML |
-|---|---|---|---|---|---|---|---|
-| Surge (kits short) | 477 | 42.7 | 3.1 | 5.1 | **2.3** | 3.2 | 3.2 |
-| Stall (kits short) | 213 | 5.8 | 0.2 | 0.4 | 0.3 | 0.3 | 0.3 |
+Each knob moves one setting while everything else stays normal. No rule is re-tuned and the ML
+model is not retrained, so this shows how each rule copes when reality differs from what it was
+set up for.
 
-### What it says
-- **Under shocks, the schedule rule pulls ahead of tuned min/max on stockouts:** surge 8.3 vs
-  12.4 kits short (95% range of the difference -6.9 to -1.4), stall 7.2 vs 10.9 (-6.2 to -1.2).
-  Fixed min/max levels were set for normal enrollment; the schedule rule adapts.
-- Its stock and waste advantage holds in every scenario.
-- ML and Bayesian stay just behind the schedule rule, by about 1-2 kits, most in the surge.
-- Stalls barely hurt anyone: a site that stops enrolling still has stock for its existing
-  patients. The waste goes up slightly instead (kits waiting for patients who do not come).
-- The shocks are still fairly mild for well-set rules, because most kits go to patients
-  already on treatment and enrollment is capped at 500. Harsher tests (bigger or regional
-  surges, shipping delays) are not covered.
+**Kits short per trial**
+
+| Knob | Fixed refill | Fixed refill by region | Recent use | Expected visits | + site pace | + ML |
+|---|---|---|---|---|---|---|
+| Normal | 293 | 11.3 | 9.8 | **7.2** | 8.2 | 8.1 |
+| Safety: low | 1,116 | 61.5 | 43.0 | **30.0** | 39.5 | 33.4 |
+| Safety: high | 79 | 3.1 | **2.4** | 4.1 | 4.2 | 4.3 |
+| Shipping time +1 week | 609 | 68.2 | **17.5** | 18.8 | 21.2 | 20.5 |
+| Shelf life 12 months | 324 | 33.2 | 23.3 | **18.8** | 19.5 | 19.4 |
+| Shelf life 36 months | 292 | 10.3 | 9.3 | **6.7** | 7.7 | 7.6 |
+| Enrollment slower | 230 | 6.1 | 7.3 | **5.8** | 6.4 | 6.2 |
+| Enrollment faster | 341 | 14.7 | 13.5 | **8.4** | 10.0 | 9.9 |
+
+**Kits expired per trial**
+
+| Knob | Fixed refill | Fixed refill by region | Recent use | Expected visits | + site pace | + ML |
+|---|---|---|---|---|---|---|
+| Normal | 532 | 1,096 | 219 | 187 | 187 | 187 |
+| Safety: low | 299 | 814 | 138 | 106 | 105 | 105 |
+| Safety: high | 789 | 1,399 | 319 | 274 | 274 | 274 |
+| Shipping time +1 week | 539 | 1,110 | 244 | 200 | 199 | 199 |
+| Shelf life 12 months | 2,282 | **5,232** | 808 | 592 | 589 | 589 |
+| Shelf life 36 months | 249 | 492 | 101 | 104 | 104 | 104 |
+| Enrollment slower | 706 | 1,438 | 298 | 260 | 259 | 259 |
+| Enrollment faster | 418 | 861 | 172 | 144 | 143 | 143 |
+
+**Kits sitting at sites (average per week)**
+
+| Knob | Fixed refill | Fixed refill by region | Recent use | Expected visits | + site pace | + ML |
+|---|---|---|---|---|---|---|
+| Normal | 491 | 986 | 292 | 191 | 188 | 188 |
+| Safety: low | 261 | 747 | 207 | 124 | 118 | 120 |
+| Safety: high | 729 | 1,222 | 393 | 262 | 261 | 261 |
+
+What the knobs show:
+- **Slower shipping hurts the fixed rules badly** (Fixed refill by region: 11 to 68 kits short).
+  Their levels were set for normal shipping. The forecast-type rules know the shipping time and
+  adjust (about 18-21).
+- **Short shelf life makes fixed rules waste enormously:** Fixed refill by region loses 5,232
+  kits per trial at 12 months, against 592 for Expected visits.
+- **Faster enrollment** hurts the fixed rules more (14.7 vs 8.4 kits short): their levels were
+  set for the planned pace.
+- **The safety knob shows the trade-off.** At high safety, Fixed refill by region (3.1) and
+  Recent use (2.4) run short less than Expected visits (4.1), but hold far more stock (1,222 and
+  393 kits vs 262). At low safety, Expected visits is clearly best. Put on one chart
+  (shortfalls against stock held), Expected visits runs short less than the others wherever
+  their stock levels overlap (about 120-260 kits). Even at high safety it holds less stock than
+  the others do at normal safety, so how it would do at 400+ kits is not covered.
 
 ---
 

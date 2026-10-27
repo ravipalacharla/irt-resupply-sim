@@ -129,3 +129,14 @@ All values are invented or taken from public sources. Each entry says where it c
 | B2 | Exposure counts ramp-up weeks partly (week k after opening counts min(1, (k+1)/12)), the ramp-up profile a planner would assume. | Design choice (uses the generator's ramp-up length) |
 | B3 | New patients for one arm over the cover window ~ negative binomial (Gamma-Poisson predictive, thinned by arm share). Spare kits = 95% quantile, at least 2 while enrolling, 0 after closing. | Standard |
 | B4 | The model assumes a constant pace per site; it does not model drift, country effects, or bursts. | Limitation (intended) |
+
+## Dashboard knobs (all in `sim/config.py`, `KNOBS`)
+
+| # | Assumption | Source |
+|---|---|---|
+| K1 | One knob moves at a time; everything else stays normal. 10 runs: normal x (no shock, surge, stall) + 7 knob positions. 200 trials each, same seeds. | Design choice |
+| K2 | Safety low / high: cushion 1.0 / 2.33 (about 84% / 99%), Bayesian quantile 0.84 / 0.99, spare-kit floor 1 / 3; min/max levels -2 / +2 (plain: 0/3 and 4/7). | Design choice |
+| K3 | Shipping time +1 week in every region. Shelf life 12 or 36 months. Enrollment pace x0.7 or x1.3. | Design choice |
+| K4 | Nothing is re-tuned or retrained for a knob: tuned min/max levels, the ML model, and the Bayesian prior stay as set for normal conditions. | Design choice (tests robustness) |
+| K5 | Raising the simulation limit from 260 to 320 weeks changed the random trials (draws are made for every week up to the limit). Same process, different random sample; all 10 runs use the new trials. | Note |
+| K6 | Only 5 trials per run keep week-by-week rows (for the site chart); all trials keep their scores and feed the country-week risk table. Any trial can be recreated from its seed. | Design choice (small footprint) |

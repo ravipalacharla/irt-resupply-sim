@@ -22,7 +22,7 @@ itself; check with `brew services list`.
 ## 2. First time only: train the ML model
 
 ```zsh
-caffeinate -i python -m sim.train_ml
+caffeinate -s python -m sim.train_ml
 ```
 
 Takes about 30 seconds. Builds 40 training trials, trains LightGBM, prints its accuracy next
@@ -40,13 +40,22 @@ python -m sim.fit_prior        # prints  BAYES_PRIOR = (..., ...)
 
 ## 2b. Main run
 
+**Before a long run: plug the Mac into power and keep the lid open.** On battery, or with the
+lid closed, macOS sleeps no matter what, and the run just pauses (a 6-minute job can take
+hours). `caffeinate -s` keeps the Mac awake while it is plugged in.
+
 ```zsh
-caffeinate -i python -m sim.run --seeds 200 --reset
+caffeinate -s python -m sim.run --seeds 200 --reset                    # normal settings, 3 scenarios
+caffeinate -s python -m sim.run --seeds 200 --plan dashboard --reset   # the 10 dashboard runs (~5 hours)
+python -m sim.export                                                   # write the dashboard files
 ```
 
 | Part | Meaning |
 |---|---|
-| `caffeinate -i` | Keeps the Mac awake until the run finishes. Without it, a Mac on battery can sleep mid-run and a 6-minute run turns into an hour. |
+| `caffeinate -s` | Keeps the Mac awake until the run finishes, **when plugged in**. On battery or with the lid closed it cannot stop sleep. |
+| `--plan dashboard` | Runs all 10 dashboard runs: normal settings x (no shock, surge, stall) + the 7 other knob positions. |
+| `--knob shelf_12` | Runs one knob position (names in `config.KNOBS`). |
+| `--detail-trials 5` | How many trials per run keep their week-by-week rows (for the site chart). Default 5. All trials keep their scores. |
 | `--seeds 200` | Number of simulated trials **per scenario**. Use 5–20 for quick checks. |
 | `--scenarios base surge stall` | Which scenarios to run (default: all three). E.g. `--scenarios base` for just the normal case. |
 | `--reset` | Drops and recreates all tables first. **Use it whenever the table layout (`sql/schema.sql`) changed.** Without it, existing trials with the same ids are replaced and others are kept. |
@@ -60,8 +69,14 @@ What it does, for each scenario and each trial:
 After each scenario it prints a table: average scores for each rule, and the forecast minus
 tuned min/max difference with its 95% range.
 
-Run time: about 3 seconds per trial (5 rules), so ≈ 10 minutes per scenario, ≈ 30 minutes
-for all three. Database size for all three scenarios: ≈ 14 GB.
+Run time (Mac awake): about 9 seconds per trial with all 6 rules, so about 30 minutes per run
+of 200 trials, about 5 hours for the 10 dashboard runs. Database size after the 10 runs: about
+1.8 GB (week-by-week rows are kept for 5 trials per run; any other trial can be recreated
+exactly from its seed).
+
+**The dashboard files** (`python -m sim.export`) go to `web/data/`: about 67 MB in total, one
+folder per knob position. A browser only loads what it shows: about 0.05 MB for screens 1-2
+and about 0.08 MB (compressed) per site-chart trial.
 
 ---
 
@@ -72,7 +87,7 @@ the current settings. **Re-tune whenever you change anything about enrollment, v
 shipping time, shelf life, or the forecast rule**, otherwise the tuned baseline is stale.
 
 ```zsh
-caffeinate -i python -m sim.tune_minmax
+caffeinate -s python -m sim.tune_minmax
 ```
 
 It takes ~8 minutes, then prints a line like:
@@ -83,7 +98,7 @@ MINMAX_TUNED = {'Asia-Pacific': (10, 15), 'Europe': (6, 8), 'North America': (4,
 
 Paste that into `sim/config.py`, run `pytest -q`, then do the main run (section 2b).
 
-Retrain the ML model the same way: `caffeinate -i python -m sim.train_ml`.
+Retrain the ML model the same way: `caffeinate -s python -m sim.train_ml`.
 
 ---
 
@@ -199,6 +214,6 @@ FROM inventory_week WHERE trial_id = 0 AND site_id = 1 ORDER BY policy, arm, wee
 | Can't connect to database | `brew services restart postgresql@16` |
 | `No ML model at models/lgbm_need.txt` | `python -m sim.train_ml` (section 2) |
 | LightGBM import error about `libomp` | `brew install libomp` |
-| Run is very slow | Mac went to sleep: use `caffeinate -i` (section 2) |
+| Run or tests are very slow, or seem to hang | The Mac is sleeping (on battery or lid closed). Plug in, open the lid, use `caffeinate -s` (section 2b). Check with `pmset -g log \| grep Sleep` |
 | Errors about missing columns after a code update | Table layout changed: add `--reset` |
 | pgAdmin asks for user `postgres` | There is none; use your Mac login name (see README) |

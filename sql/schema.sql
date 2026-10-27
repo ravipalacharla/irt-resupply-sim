@@ -5,7 +5,8 @@
 -- ---------- Phase 1: the trial (same for every policy) ----------
 
 CREATE TABLE IF NOT EXISTS trial (
-    trial_id     integer     PRIMARY KEY,               -- scenario number x 100000 + seed
+    trial_id     integer     PRIMARY KEY,               -- knob no. x 1000000 + scenario no. x 100000 + seed
+    knob         text        NOT NULL,                  -- dashboard knob position (config.KNOBS)
     scenario     text        NOT NULL,                  -- base / surge / stall (config.SCENARIOS)
     seed         integer     NOT NULL,                  -- same seed = same base trial in every scenario
     master_seed  bigint      NOT NULL,
@@ -124,4 +125,18 @@ CREATE TABLE IF NOT EXISTS policy_result (
     shipments          integer          NOT NULL,
     avg_kits_at_sites  double precision NOT NULL,      -- all sites combined, average per week
     PRIMARY KEY (trial_id, policy)
+);
+
+-- ---------- Dashboard: Screen 2 (where and when do sites run out) ----------
+-- Built from every trial of a run, so week-by-week rows need not be kept for all trials.
+
+CREATE TABLE IF NOT EXISTS country_week_risk (
+    knob                  text    NOT NULL,
+    scenario              text    NOT NULL,
+    policy                text    NOT NULL,
+    country               text    NOT NULL,
+    week                  integer NOT NULL,
+    trials_with_stockout  integer NOT NULL,   -- trials where at least one site in the country ran short
+    trials                integer NOT NULL,   -- trials in the run
+    PRIMARY KEY (knob, scenario, policy, country, week)
 );

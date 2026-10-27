@@ -16,7 +16,7 @@ DB_URL = os.environ.get("IRT_SIM_DB_URL", "postgresql+psycopg2:///irt_sim")
 
 # --- Trial ---
 STUDY_START = date(2027, 1, 4)   # week 0 (a Monday)
-TRIAL_WEEKS = 260                # max horizon (5 years). Each trial is simulated until its
+TRIAL_WEEKS = 320                # max horizon (about 6 years). Each trial is simulated until its
                                  # last patient's last visit; the generator checks it fits.
 ENROLL_TARGET = 500              # enrollment stops once this many patients are in
 ARMS = {"A": 0.5, "B": 0.5}      # arm -> share of patients (1:1)
@@ -124,6 +124,46 @@ SCENARIOS = {
 SHOCK_START_WEEKS = (26, 70)
 
 
+# --- Dashboard knobs: one knob moved at a time, everything else at normal ---
+# Each entry lists the settings it changes. Nothing is re-tuned or retrained for a knob
+# (tuned min/max, the ML model, and the Bayesian prior stay as set for normal conditions).
+def _shift(levels, d):
+    return {r: (max(lo + d, 0), hi + d) for r, (lo, hi) in levels.items()}
+
+
+KNOBS = {
+    "normal": {},
+    # Safety level: cushion / quantile / floor for forecast-type rules; levels -2 / +2 for min/max.
+    "safety_low": {"FORECAST_Z": 1.0, "BAYES_QUANTILE": 0.84, "FORECAST_FLOOR": 1,
+                   "MINMAX_MIN": 0, "MINMAX_MAX": 3, "MINMAX_TUNED": _shift(MINMAX_TUNED, -2)},
+    "safety_high": {"FORECAST_Z": 2.33, "BAYES_QUANTILE": 0.99, "FORECAST_FLOOR": 3,
+                    "MINMAX_MIN": 4, "MINMAX_MAX": 7, "MINMAX_TUNED": _shift(MINMAX_TUNED, 2)},
+    # Shipping time: one extra week everywhere.
+    "shipping_plus1": {"LEAD_TIME_WEEKS": {r: w + 1 for r, w in LEAD_TIME_WEEKS.items()}},
+    # Shelf life of each lot.
+    "shelf_12": {"SHELF_LIFE_MONTHS": 12},
+    "shelf_36": {"SHELF_LIFE_MONTHS": 36},
+    # Enrollment speed: every site's pace x0.7 or x1.3 (the plan was wrong).
+    "enroll_slower": {"SITE_PACE_MEAN": SITE_PACE_MEAN * 0.7},
+    "enroll_faster": {"SITE_PACE_MEAN": SITE_PACE_MEAN * 1.3},
+}
+
+# The 10 runs behind the dashboard: (knob, scenario).
+DASHBOARD_RUNS = ([("normal", "base"), ("normal", "surge"), ("normal", "stall")]
+                  + [(k, "base") for k in KNOBS if k != "normal"])
+
+
+def set_knob(name):
+    """Apply one knob's settings to this module. Returns the old values, for restore_knob()."""
+    old = {k: globals()[k] for k in KNOBS[name]}
+    globals().update(KNOBS[name])
+    return old
+
+
+def restore_knob(old):
+    globals().update(old)
+
+
 def make_rng(run_seed=0, stream=0):
     """Random generator for one simulated trial.
 
@@ -137,4 +177,5 @@ def make_rng(run_seed=0, stream=0):
 
 def params():
     """All UPPERCASE settings above, for storing with each run."""
-    return {k: v for k, v in globals().items() if k.isupper() and k != "DB_URL"}
+    return {k: v for k, v in globals().items()
+            if k.isupper() and k not in ("DB_URL", "KNOBS", "DASHBOARD_RUNS")}
