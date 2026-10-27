@@ -45,7 +45,7 @@ All values are invented or taken from public sources. Each entry says where it c
 | P3 | Steady pace averages 0.12 patients/site/week (~0.5/month); ramps up in a straight line over 12 weeks. | Invented, typical oncology range |
 | P4 | Arm assigned by independent 1:1 random draw per patient (no block randomization). | Simplification |
 | P5 | No screen failures modeled; every enrolled patient gets a kit at enrollment. | Simplification |
-| P6 | Dispensing visit every 4 weeks, 1 kit per visit. | Invented |
+| P6 | Dispensing visit every 4 weeks, 1 kit per visit. **Superseded by V1-V4** (visit windows). | Invented |
 | P7 | Time on treatment (any stop reason): median 40 weeks, protocol max 104 weeks. | Invented |
 | P8 | In the week the target is reached, the extra patients are dropped at random so the total is exactly 500. | Simplification |
 
@@ -59,10 +59,10 @@ All values are invented or taken from public sources. Each entry says where it c
 | N4 | Sites hand out the earliest-expiring kits first. | Standard practice |
 | N5 | A kit is removed as expired once it would expire before the next visit (4 weeks). | Design choice (see S2) |
 | N6 | Min/max runs per site, per arm: if on hand + in transit <= 2, top up to 5. Values are illustrative, not tuned. | Invented |
-| N7 | Each arm reorders on its own; if both arms order in the same week, they share one box (one shipment). | Simplification |
+| N7 | ~~Each arm reorders on its own.~~ **Superseded by T1** (both arms topped up in one box). | Simplification |
 | N8 | The rule starts at (site opening - lead time), so the first box arrives on opening day. | Design choice |
 | N9 | No new shipments once enrollment is closed and a site has nobody on treatment. Kits already there stay until the end ("left at end"). | Simplification |
-| N10 | The trial is cut off at week 156; kits still at sites then are reported as left at end, not as expired. | Simplification |
+| N10 | ~~The trial is cut off at week 156.~~ **Superseded by H1** (run to the last visit). | Simplification |
 
 ## Phase 3: forecast rule (all in `sim/config.py`)
 
@@ -110,3 +110,22 @@ All values are invented or taken from public sources. Each entry says where it c
 | M5 | Predictions are made in one batch per trial before the weekly loop. Valid because the inputs depend only on the trial, not on shipping decisions. | Implementation (speed) |
 | M6 | First version added spare kits after enrollment closed; changed to 0 to match the schedule rule. Found on tuning trials. | Design iteration |
 | M7 | The model learns patterns of our own generator (circular validation, scope section 9). Any win is "under these assumptions". | Limitation |
+
+## Realism pass (2026-10-25; all in `sim/config.py`)
+
+| # | Assumption | Source |
+|---|---|---|
+| V1 | Cycle-based visits: each 4-week cycle is counted from the previous actual visit, so delays accumulate. | Typical oncology cycles |
+| V2 | Each visit: 70% in its planned week, 15% one week early, 15% one week late. | Invented (~+/-7 day window) |
+| V3 | 2% of visits are missed: no kit; the next cycle is counted from the missed visit's planned week. | Invented |
+| V4 | Rules know each patient's planned next visit (last actual visit + 4 weeks), not its shift. An overdue planned visit is expected the following week; a missed visit is recognised one week after its planned week. | Design choice (no peeking) |
+| G1 | Country effect: sites in a country share a log-normal pace multiplier (sd 0.3, average 1). | Invented |
+| G2 | Pace drift: each site's pace follows a log random walk from opening (sd 0.03 per week), with no upward bias. | Invented |
+| G3 | Bursts: 5% of site-weeks enroll at 4x pace; other weeks scaled so the long-run average is unchanged. | Invented |
+| G4 | G1-G3 exist so the Bayesian Gamma-Poisson rule faces data it does not perfectly match (scope section 9). Net effect: enrollment 97 weeks on average (was 92). | Design choice |
+| H1 | Each trial runs until its last patient's last visit (about weeks 200-220; max horizon 260). Close-out is included. | Design choice |
+| T1 | One box per site per week: if either arm orders, the other arm is topped up to its target in the same box. Never adds a box. | Standard practice |
+| B1 | Bayesian rule prior: Gamma(0.84, 8.58) on site pace, fitted by method of moments on the 40 ML training trials (removing Poisson noise from short exposure). | Anisimov & Fedorov (2007) method |
+| B2 | Exposure counts ramp-up weeks partly (week k after opening counts min(1, (k+1)/12)), the ramp-up profile a planner would assume. | Design choice (uses the generator's ramp-up length) |
+| B3 | New patients for one arm over the cover window ~ negative binomial (Gamma-Poisson predictive, thinned by arm share). Spare kits = 95% quantile, at least 2 while enrolling, 0 after closing. | Standard |
+| B4 | The model assumes a constant pace per site; it does not model drift, country effects, or bursts. | Limitation (intended) |

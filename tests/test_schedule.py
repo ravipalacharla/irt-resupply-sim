@@ -20,9 +20,12 @@ def known(scheduled, enroll_history, lead_time=2, enrolling=True, arm="A"):
             "lead_time": lead_time, "enrolling": enrolling, "arm": arm}
 
 
-def test_scheduled_kits_match_actual_visits_when_nobody_stops_early(trial):
-    # Keep only patients who never stop early: then the schedule must equal their real
-    # future visits exactly, for every site, arm, week, and look-ahead step.
+def test_schedule_exact_when_visits_never_shift(monkeypatch):
+    # With no visit shifts, no misses, and only patients who never stop early, what the rule
+    # knows must equal their real future visits exactly.
+    monkeypatch.setattr(c, "VISIT_SHIFT_PROBS", {0: 1.0})  # monkeypatch: temporary config change
+    monkeypatch.setattr(c, "MISSED_VISIT_PROB", 0.0)
+    trial = generate_trial(c.make_rng(0))
     p = trial["patient"][~trial["patient"]["discontinued"]]
     v = trial["visit"][trial["visit"]["patient_id"].isin(p["patient_id"])]
     v = v.merge(p[["patient_id", "site_id", "enroll_week"]], on="patient_id")
@@ -36,6 +39,18 @@ def test_scheduled_kits_match_actual_visits_when_nobody_stops_early(trial):
                 assert arr[w, i] == real
                 checked += 1
     assert checked > 1000
+
+
+def test_schedule_follows_actual_visits_and_overdue(trial):
+    # A patient whose visit is late is expected next week; after a visit, next is one cycle on.
+    sched = scheduled_kits(trial)
+    v = trial["visit"].merge(trial["patient"][["patient_id", "site_id", "end_week"]], on="patient_id")
+    late = v[(v["week"] - v["planned_week"] == 1) & ~v["missed"]].head(50)
+    for r in late.itertuples():
+        w = r.planned_week                      # visit was due this week but did not happen
+        if w >= r.end_week:
+            continue
+        assert sched[(r.site_id, r.arm)][w, 0] >= 1   # so it is expected next week
 
 
 def test_schedule_never_includes_stopped_or_future_patients(trial):

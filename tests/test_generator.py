@@ -59,13 +59,32 @@ def test_visits_within_treatment_window(trial):
     assert (v["week"] < c.TRIAL_WEEKS).all()
 
 
-def test_visit_spacing_and_first_visit(trial):
+def test_first_visit_at_enrollment(trial):
     v = trial["visit"].merge(trial["patient"], on="patient_id")
     first = v[v["visit_num"] == 1]
-    assert (first["week"] == first["enroll_week"]).all()
+    assert (first["week"] == first["enroll_week"]).all() and not first["missed"].any()
     assert len(first) == len(trial["patient"])  # every patient gets a first dispense
-    gaps = v.sort_values(["patient_id", "visit_num"]).groupby("patient_id")["week"].diff().dropna()
-    assert (gaps == c.VISIT_INTERVAL_WEEKS).all()
+
+
+def test_cycle_based_visit_windows(trial):
+    v = trial["visit"].sort_values(["patient_id", "visit_num"])
+    # each visit is planned one cycle after the previous ACTUAL visit (or missed planned week)
+    prev_anchor = v.groupby("patient_id")["week"].shift()   # missed rows store week = planned
+    later = v[v["visit_num"] > 1]
+    assert (later["planned_week"] == prev_anchor.loc[later.index] + c.VISIT_INTERVAL_WEEKS).all()
+    # shifts only within the allowed window; missed visits have no shift and no kit
+    shift = later["week"] - later["planned_week"]
+    assert shift.isin(list(c.VISIT_SHIFT_PROBS)).all()
+    assert (shift[later["missed"]] == 0).all() and (later.loc[later["missed"], "kits"] == 0).all()
+
+
+def test_visit_shift_and_miss_rates(many_trials):
+    v = pd.concat([t["visit"] for t in many_trials])
+    later = v[v["visit_num"] > 1]
+    assert abs(later["missed"].mean() - c.MISSED_VISIT_PROB) < 0.005
+    shares = (later["week"] - later["planned_week"])[~later["missed"]].value_counts(normalize=True)
+    for shift, prob in c.VISIT_SHIFT_PROBS.items():
+        assert abs(shares[shift] - prob) < 0.02
 
 
 def test_treatment_never_exceeds_max(trial):
@@ -108,3 +127,41 @@ def test_long_tail_sites(many_trials):
         stumble_ratio.append(by_stumble[True] / by_stumble[False])
     assert np.mean(top_share) > 0.4
     assert np.mean(stumble_ratio) < 0.3
+
+
+def test_country_effect_shared_within_country(monkeypatch):
+    # Same seed with and without the country effect: the pace ratio is one number per country.
+    with_effect = generate_trial(c.make_rng(4))["site"]
+    monkeypatch.setattr(c, "COUNTRY_EFFECT_SD", 0.0)
+    without = generate_trial(c.make_rng(4))["site"]
+    ratio = with_effect["pace_per_week"] / without["pace_per_week"]
+    per_country = ratio.groupby(with_effect["country"]).agg(["min", "max"])
+    assert np.allclose(per_country["min"], per_country["max"])
+    assert per_country["min"].nunique() > 1   # countries differ
+
+
+def test_bursts_make_weeks_lumpier(monkeypatch):
+    # Poisson counts have variance = mean; bursts push variance above the mean.
+    def dispersion():
+        ratios = []
+        for s in range(10):
+            sw = generate_trial(c.make_rng(s))["site_week"]
+            busy = sw[sw["is_open"]].groupby("site_id")["enrolled"].agg(["mean", "var"])
+            busy = busy[busy["mean"] > 0.1]
+            ratios.append((busy["var"] / busy["mean"]).median())
+        return np.mean(ratios)
+    lumpy = dispersion()
+    monkeypatch.setattr(c, "BURST_PROB", 0.0)
+    monkeypatch.setattr(c, "PACE_DRIFT_SD", 0.0)
+    assert lumpy > dispersion()
+
+
+def test_realism_keeps_average_pace(monkeypatch):
+    # Drift and bursts are built to leave the long-run average pace unchanged.
+    def weeks_to_target():
+        return np.mean([generate_trial(c.make_rng(s))["patient"]["enroll_week"].max() for s in range(20)])
+    realistic = weeks_to_target()
+    monkeypatch.setattr(c, "BURST_PROB", 0.0)
+    monkeypatch.setattr(c, "PACE_DRIFT_SD", 0.0)
+    plain = weeks_to_target()
+    assert abs(realistic - plain) / plain < 0.1

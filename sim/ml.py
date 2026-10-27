@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from sim import config as c
+from sim.generator import trial_end_week
 from sim.network import demand_by_site_arm, scheduled_kits
 
 L = c.SCHEDULE_LOOKAHEAD_WEEKS
@@ -62,11 +63,13 @@ def build_features(trial, with_label=True):
     sch = np.array([sched.get(k, np.zeros((W, L))) for k in keys], dtype=float)  # [SA, W, L]
 
     enrolled = trial["site_week"].pivot(index="site_id", columns="week", values="enrolled")
+    enrolled = enrolled.reindex(columns=range(W), fill_value=0)              # weeks after trial end = 0
     enrolled = enrolled.loc[sites["site_id"]].to_numpy(dtype=float)[srow]       # [SA, W]
     p = trial["patient"]
     on_site = on_treatment_matrix(p, "site_id", list(sites["site_id"]))[srow]
     on_arm = on_treatment_matrix(p, ["site_id", "arm"], keys)
-    trial_cum = trial["site_week"].groupby("week")["enrolled"].sum().cumsum().to_numpy()
+    trial_cum = (trial["site_week"].groupby("week")["enrolled"].sum()
+                 .reindex(range(W), fill_value=0).cumsum().to_numpy())
     closed_from = p["enroll_week"].max() + 1 if len(p) >= c.ENROLL_TARGET else W
 
     weeks = np.arange(W)
@@ -112,7 +115,7 @@ def build_features(trial, with_label=True):
         rows.append(f)
     out = pd.concat(rows, ignore_index=True)
     # Only weeks where the rule can be asked: from one shipping time before opening.
-    out = out[out["weeks_open"] >= -out["lead_time"]]
+    out = out[(out["weeks_open"] >= -out["lead_time"]) & (out["week"] < trial_end_week(trial))]
     if with_label:
         out = out[out["label"].notna()]
     return out.reset_index(drop=True)

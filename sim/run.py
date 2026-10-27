@@ -15,9 +15,9 @@ from sim.db import create_schema, get_engine, load_trial
 from sim.generator import generate_trial
 from sim.metrics import compare, summarize
 from sim.network import simulate_supply
-from sim.policies import forecast, minmax, minmax_tuned, ml, schedule
+from sim.policies import forecast, minmax, minmax_tuned, ml, schedule, schedule_bayes
 
-POLICIES = [minmax, minmax_tuned, forecast, schedule, ml]
+POLICIES = [minmax, minmax_tuned, forecast, schedule, schedule_bayes, ml]
 SCENARIO_NAMES = list(c.SCENARIOS)
 
 

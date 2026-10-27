@@ -35,3 +35,34 @@ Total: 1 base + 9 = 10 runs (~2-2.5 hours one-off compute once ML is in).
   Site-level dates only make sense inside one chosen trial (sites differ per trial).
 - Knob runs store summaries plus full detail for a few trials only, to keep the database small.
 - Needs a per-week "target stock" saved for forecast-type rules (for the drill-down).
+
+## Decisions (2026-10-27)
+
+### Words used on screen
+- **Shipment**: what is sent to a site. (**Lot** keeps its clinical supply meaning: a
+  manufacturing batch with one expiry date.)
+- **Reorder rule**: the way the system decides when to send a shipment to a site, and how many kits.
+
+### Rule names on screen
+| Code name | Name on screen | One line under the name |
+|---|---|---|
+| minmax | Fixed refill | When a site has 2 kits or fewer, refill it to 5. |
+| minmax_tuned | Fixed refill by region | Same idea, but each region has its own numbers. |
+| forecast | Recent use | Look at the last 8 weeks of use. Keep enough until the next shipment arrives, plus a cushion. |
+| schedule | Expected visits | Count the kits needed for the visits expected for current patients, plus 2 spare kits for new patients. |
+| schedule_bayes | Expected visits + site pace | Same, but estimate new patients from how fast this site has enrolled so far. |
+| ml | Expected visits + machine learning | A model trained on past trials predicts how many kits the site will need. |
+
+Each rule gets an info card: Looks at / Decides / Example / Good at / Weak at, plus a small
+picture of what the shelf looks like over time under that rule.
+
+### Screens
+1. **Which rule works best?** All 6 rules. (Side by side or a drop-down: UI decision later.)
+2. **Where and when do sites run out?** Country x week color grid.
+3. **One site** (animated step chart): single site only. No country totals, because adding
+   sites together hides stockouts (one empty site + one full site looks fine).
+   Data kept to the bare minimum needed for the chart.
+
+### Defaults
+- Picked rule: **Expected visits** (as few stockouts as any rule, far less waste).
+- Comparison line on screen 3: **Fixed refill by region** (closest to what most teams use today).

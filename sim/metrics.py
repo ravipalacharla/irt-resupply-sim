@@ -7,7 +7,7 @@ from sim import config as c
 
 def summarize(supply):
     inv, ship = supply["inventory_week"], supply["shipment"]
-    last = inv[inv["week"] == c.TRIAL_WEEKS - 1]
+    last = inv[inv["week"] == inv["week"].max()]   # trial end (after the last visit)
     return pd.DataFrame([{
         "policy": inv["policy"].iloc[0],
         "stockout_events": int((inv["kits_short"] > 0).sum()),  # site-arm-weeks with any shortfall

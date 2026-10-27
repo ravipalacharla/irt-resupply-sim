@@ -80,7 +80,7 @@ def test_kits_conserved(supply):
     inv, ship = supply["inventory_week"], supply["shipment"]
     s = summarize(supply).iloc[0]
     assert ship["kits"].sum() == inv["kits_dispensed"].sum() + inv["kits_expired"].sum() + s["kits_left_at_end"]
-    assert inv["kits_received"].sum() + inv["in_transit"][inv["week"] == c.TRIAL_WEEKS - 1].sum() == ship["kits"].sum()
+    assert inv["kits_received"].sum() + inv["in_transit"][inv["week"] == inv["week"].max()].sum() == ship["kits"].sum()
 
 
 def test_minmax_orders_up_to_max(supply):
@@ -112,3 +112,25 @@ def test_baseline_has_real_stockouts_and_waste():
     assert (res["kits_expired"] > 0).all()
     assert np.mean(res["kits_short"]) > 50
     assert np.mean(res["kits_expired"]) > 50
+
+
+def test_runs_to_end_of_trial(trial, supply):
+    # The simulation covers every visit, so close-out is included and nobody is cut off.
+    inv = supply["inventory_week"]
+    last_visit = trial["visit"]["week"].max()
+    assert inv["week"].max() == last_visit
+    assert (trial["patient"]["end_week"] <= c.TRIAL_WEEKS).all()
+    assert trial["site_week"]["week"].max() == last_visit
+
+
+def test_other_arm_topped_up_in_same_box(supply):
+    # Whenever a box goes to a site, every arm the rule was asked about ends at or above target.
+    inv = supply["inventory_week"]
+    box_weeks = inv.groupby(["site_id", "week"])["kits_ordered"].transform("sum") > 0
+    asked = inv["target"].notna()
+    rows = inv[box_weeks & asked]
+    assert len(rows) > 0
+    assert (rows["on_hand"] + rows["in_transit"] >= rows["target"]).all()
+    # and topping up never adds a box: boxes = site-weeks with any order
+    ship = supply["shipment"]
+    assert ship["shipment_id"].nunique() == ship[["site_id", "ship_week"]].drop_duplicates().shape[0]

@@ -31,6 +31,13 @@ this once after cloning, and again whenever you change anything that affects dem
 (enrollment, visits, dropouts, shipping time). The main run stops with a message if the model
 is missing.
 
+Then fit the Bayesian rule's prior (a few seconds) and paste the printed line into
+`sim/config.py`:
+
+```zsh
+python -m sim.fit_prior        # prints  BAYES_PRIOR = (..., ...)
+```
+
 ## 2b. Main run
 
 ```zsh
@@ -46,7 +53,7 @@ caffeinate -i python -m sim.run --seeds 200 --reset
 
 What it does, for each scenario and each trial:
 1. Builds the trial (sites, patients, visits), adding the scenario's surge or stall if any.
-2. Replays it under each rule (`minmax`, `minmax_tuned`, `forecast`, `schedule`, `ml`).
+2. Replays it under each rule (`minmax`, `minmax_tuned`, `forecast`, `schedule`, `schedule_bayes`, `ml`).
 3. Scores each rule.
 4. Loads everything into Postgres (`irt_sim`).
 
@@ -96,13 +103,13 @@ psql irt_sim
 | `site` | trial, site | Region, country, opening week, pace, stumbling flag, shocked flag + shock week |
 | `site_week` | trial, site, week | Open?, patients enrolled, kits needed (all arms) |
 | `patient` | trial, patient | Site, arm, enrollment week, end week |
-| `visit` | trial, patient, visit | Week, date, arm, kits |
+| `visit` | trial, patient, visit | Actual week, planned week, missed flag, date, arm, kits |
 | `lot` | trial, lot | Arm, made / expiry / release dates |
 | `shipment` | trial, rule, box, arm | Site, lot, ship week, arrival week, kits |
 | `inventory_week` | trial, rule, site, arm, week | Received, needed, handed out, short, expired, ordered, on hand, in transit |
 | `policy_result` | trial, rule | The scores (see `how_it_works.md` section 6) |
 
-`policy` in the tables = the reorder rule: `minmax`, `minmax_tuned`, `forecast`, `schedule`, `ml`.
+`policy` in the tables = the reorder rule: `minmax`, `minmax_tuned`, `forecast`, `schedule`, `schedule_bayes`, `ml`.
 
 **Trial ids:** `trial_id` = scenario number × 100000 + seed. Base trials are 0–199, surge
 100000–100199, stall 200000–200199. Seed 7 is the same underlying trial in all three
@@ -152,7 +159,8 @@ FROM inventory_week WHERE trial_id = 0 AND site_id = 1 ORDER BY policy, arm, wee
 1. Edit the value in `sim/config.py` (every setting is there, with a comment).
 2. Add or update the matching line in `docs/assumptions.md`.
 3. `pytest -q`.
-4. If it affects demand, shipping, or the forecast rule: re-tune min/max and retrain ML (section 3).
+4. If it affects demand, shipping, or the forecast rule: re-tune min/max, retrain ML, and
+   re-fit the Bayesian prior (sections 2 and 3).
 5. Main run (section 2b). Use `--reset` if `sql/schema.sql` changed.
 
 ---
@@ -169,6 +177,8 @@ FROM inventory_week WHERE trial_id = 0 AND site_id = 1 ORDER BY policy, arm, wee
 | `sim/tune_minmax.py` | Picks tuned min/max settings |
 | `sim/ml.py` | Builds ML inputs (features) and predictions |
 | `sim/train_ml.py` | Trains and saves the LightGBM model |
+| `sim/bayes.py` | Bayesian Gamma-Poisson pace estimate and new-patient forecast |
+| `sim/fit_prior.py` | Fits the Bayesian prior from the training trials |
 | `models/` | Saved ML model (not in git) |
 | `sim/run.py` | Main run: generate, replay, score, load |
 | `sim/db.py` | Creates tables, bulk-loads data |

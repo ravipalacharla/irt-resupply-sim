@@ -9,11 +9,12 @@ step, see `docs/assumptions.md`. For how to run things, see `docs/workflow.md`.
 
 | Method | Status | Where | What it does here |
 |---|---|---|---|
-| **Gamma-Poisson enrollment model** | Built | Trial generator (`sim/generator.py`), section 3 | Gives each site its own enrollment pace (Gamma: many slow sites, a few fast) and random weekly patient counts around that pace (Poisson). The standard model in published clinical enrollment forecasting. |
+| **Gamma-Poisson enrollment model** | Built | Trial generator (`sim/generator.py`), section 3 | Gives each site its own enrollment pace (Gamma: many slow sites, a few fast) and random weekly patient counts around that pace (Poisson). The standard model in published clinical enrollment forecasting. Country effects, pace drift, and bursts are added on top for realism. |
 | **Monte Carlo simulation** | Built | Runner (`sim/run.py`), sections 2, 6–8 | Runs 200 random trials per scenario and replays each under every reorder rule. Results are averages and 95% ranges across those trials. This is how every rule, including ML, is tested. |
 | Min/max reorder rules | Built | `sim/policies/minmax.py`, `minmax_tuned.py`, section 5 | Fixed reorder trigger and refill level (plain arithmetic). |
 | Rolling-average forecast rule | Built | `sim/policies/forecast.py`, section 5 | Recent average use + standard safety-stock formula (plain arithmetic). |
-| Schedule-based forecast rule | Built | `sim/policies/schedule.py`, section 5 | Known visit dates of patients on treatment + spare kits for new patients (plain arithmetic). The baseline ML must beat. |
+| Schedule-based forecast rule | Built | `sim/policies/schedule.py`, section 5 | Planned visits of patients on treatment + spare kits for new patients (plain arithmetic). The baseline ML must beat. |
+| **Bayesian Gamma-Poisson forecast** | Built | `sim/bayes.py`, `sim/policies/schedule_bayes.py`, section 5 | Updates each site's enrollment pace estimate as patients arrive (prior + data = posterior) and forecasts new patients as a probability distribution. Used for the spare kits in the schedule + Bayesian rule. |
 | **Gradient-boosted trees (LightGBM)** | Built | `sim/ml.py`, `sim/train_ml.py`, `sim/policies/ml.py`, section 5 | Machine-learning forecast of weekly kit need, used inside a reorder rule and tested with the same Monte Carlo runs. |
 
 Monte Carlo and ML are not alternatives: Monte Carlo is the test track, and each reorder rule
@@ -100,15 +101,38 @@ patient a month will see some months with 0 and some with 2 or 3.
 long tail of fast ones). Weekly counts are drawn from a Poisson distribution (the standard
 model for random arrivals).
 
+### Real-world messiness on top
+Three things make enrollment less tidy than a pure Gamma-Poisson model. They are there on
+purpose, so that the Bayesian rule (which assumes pure Gamma-Poisson) is tested on data it
+does not perfectly match, as in real life:
+
+| Effect | What happens | Real-life cause |
+|---|---|---|
+| Country effect | All sites in a country share a pace multiplier (some countries faster, some slower) | Standard of care, referral networks |
+| Pace drift | Each site's pace slowly wanders up or down over time | Staff turnover, fatigue, competing trials |
+| Bursts | In about 5% of weeks a site enrolls at 4x its usual pace | Tumor boards, referral batches |
+
+Each is built so the long-run average pace is unchanged; they add spread and surprises, not speed.
+
 ### Patients and visits
 - Each patient is randomly assigned to arm A or B (50/50). Each arm has its own kit.
-- A patient gets 1 kit at enrollment and 1 kit every 4 weeks after.
+- A patient gets 1 kit at enrollment, then 1 kit at the start of each 4-week cycle.
+- **Visit windows, cycle-based:** each cycle is counted from the previous *actual* visit, so
+  delays add up (as with oncology cycles and dose delays). Each visit lands:
+  - 70% in its planned week, 15% a week early, 15% a week late.
+- **Missed visits:** 2% of visits are skipped. No kit that week; the next cycle is counted
+  from the planned week of the missed one.
 - Patients stop treatment at random (half stop within 40 weeks) or at the 104-week maximum.
 
 ### Result
-On average enrollment takes about 92 weeks, the cumulative curve is S-shaped (slow start,
-steady middle, flat end), the top 20% of sites enroll about half the patients, and about
-15% of sites enroll nobody.
+On average enrollment takes about 97 weeks (75-118), the cumulative curve is S-shaped (slow
+start, steady middle, flat end), the top 20% of sites enroll about 55% of the patients, and
+about 16% of sites enroll nobody.
+
+### How long a trial runs
+Each trial is simulated until its **last patient's last visit** (around week 200-220), so
+site close-out and the kits left over at the very end are counted. The simulation allows up
+to 260 weeks and checks every trial fits.
 
 ---
 
@@ -124,14 +148,17 @@ steady middle, flat end), the top 20% of sites enroll about half the patients, a
 ### Shipping time
 North America 1 week, Europe 2 weeks, Asia-Pacific 3 weeks. Fixed.
 
-### What happens every week, at every site, for each arm
+### What happens every week, at every site (both arms together)
 
 1. **Receive** any shipment due this week.
 2. **Remove** kits that would expire before the next visit (counted as expired).
 3. **Hand out** kits to this week's visits, earliest expiry first. If there are not enough,
    the gap is counted as **kits short** (a stockout). The visit still happens — we do not
    delay or drop the patient, so every rule faces the same demand.
-4. **Ask the reorder rule** how many kits to send. They arrive after the region's shipping time.
+4. **Ask the reorder rule**, for each arm, how many kits to send.
+5. **One box per site:** if either arm orders, the other arm is topped up to its target in
+   the same box (if it is below target). This never adds a box, and matches how real
+   resupply works. The box arrives after the region's shipping time.
 
 The rule starts working one shipping-time before the site opens, so the first box lands on
 opening day. It stops once enrollment is closed and the site has nobody left on treatment.
@@ -153,12 +180,15 @@ code). Each rule uses only the parts it needs.
 | Kits on hand, kits in transit | all rules | Any future week's actual demand |
 | Kits the site needed each week so far | forecast | Who will enroll next |
 | Patients enrolled at the site each week so far | schedule | Which patients will stop early |
-| Upcoming visit dates of patients on treatment *now* (assuming they all keep going) | schedule | Which sites will stumble or surge |
+| Planned week of each on-treatment patient's next visits (from their last actual visit), assuming they all keep going | schedule, schedule + Bayesian, ML | Whether a visit will land early, on time, or late; who will miss a visit; which sites will stumble or surge |
 | Shipping time, region, arm, weeks since opening, enrollment open or closed | all / some | |
 
 The visit schedule counts as known because a real system knows when each enrolled patient's
-next visit is due. What it cannot know is who will drop out, so the rule assumes everyone
-keeps going.
+next visit is *planned*: one cycle after their last actual visit. It does not know whether
+the visit will land a week early or late, or be missed. If a planned week passes with no
+visit, the rule expects it the following week (still inside its window). A missed visit is
+recognised once its window has closed. The rule also cannot know who will drop out, so it
+assumes everyone keeps going.
 
 Two tests check that no rule peeks ahead: erase everything after week 60 (future visits,
 future patients, future end dates) and confirm that no decision before week 60 changes.
@@ -174,9 +204,10 @@ position it is aiming for). The target is saved each week for the dashboard.
 | Rule | Code | Settings (`sim/config.py`) |
 |---|---|---|
 | Min/max | `minmax.py` | MIN 2, MAX 5, every site |
-| Tuned min/max | `minmax_tuned.py` | North America 4/5, Europe 6/8, Asia-Pacific 10/15 (`MINMAX_TUNED`) |
+| Tuned min/max | `minmax_tuned.py` | North America 4/5, Europe 8/10, Asia-Pacific 9/12 (`MINMAX_TUNED`) |
 | Forecast | `forecast.py` | Look back 8 weeks, cushion 1.65, floor 2 while enrolling |
 | Schedule | `schedule.py` | Visits due in next (shipping + 1) weeks, + spare kits for new patients (cushion 1.65, at least 2 while enrolling) |
+| Schedule + Bayesian | `schedule_bayes.py` | Planned visits in next (shipping + 1) weeks, + spare kits = 95% cap on new patients from each site's Bayesian pace estimate (at least 2 while enrolling) (`BAYES_PRIOR`, `BAYES_QUANTILE`) |
 | ML | `ml.py` | LightGBM-predicted need over next (shipping + 1) weeks, same spare-kit logic as Schedule (`ML_PARAMS`) |
 
 All rules also follow two shared rules from the supply side (section 4): start one shipping
@@ -208,8 +239,8 @@ Otherwise do nothing.
 | Region | Shipping time | MIN | MAX |
 |---|---|---|---|
 | North America | 1 week | 4 | 5 |
-| Europe | 2 weeks | 6 | 8 |
-| Asia-Pacific | 3 weeks | 10 | 15 |
+| Europe | 2 weeks | 8 | 10 |
+| Asia-Pacific | 3 weeks | 9 | 12 |
 
 **How the numbers were picked** (`sim/tune_minmax.py`):
 1. Make 30 practice trials, separate from the 200 scoring trials (otherwise the rule would be
@@ -217,11 +248,12 @@ Otherwise do nothing.
 2. Try every MIN from 1 to 10, with MAX from MIN+1 to MIN+8 (80 combinations).
 3. For each region, keep combinations that ran short no more often than the forecast rule.
 4. Of those, pick the one with the fewest expired kits (then fewest shipments).
-5. Asia-Pacific never matched the forecast rule even at 10/15, so it got the closest one.
+5. Every region found a setting that matched the forecast rule's service. (Before the visit
+   windows were added, Asia-Pacific could not match it even at 10/15.)
 
 **Strength:** fixes most of Rule 1's stockouts.
 **Weakness:** still one setting for every site in a region, so a busy site and a dead site get
-the same 10-15 kits. That is where its waste comes from.
+the same 9-12 kits. That is where its waste comes from.
 
 ### Rule 3: Forecast
 
@@ -367,14 +399,16 @@ from, so any difference in results is down to the model.
 
 | Method | Poisson deviance |
 |---|---|
-| LightGBM | **0.16** |
-| Scheduled visits only | 0.94 |
-| Rolling 8-week average | 0.85 |
+| LightGBM | **0.29** |
+| Scheduled visits only | 2.33 |
+| Rolling 8-week average | 0.66 |
 
 Poisson deviance is the standard error measure for count forecasts. LightGBM is far more
 accurate as a forecast. Scheduled visits account for 87% of what the model learned (its
-"gain"); on top of that it learns corrections: likely dropouts, new patients from enrollment
-trends, and the approach of enrollment closing.
+"gain": 53% the visits planned in the week itself, 35% the next 8 weeks combined, which lets it
+spread a planned visit over the weeks it might land in). On top of that it learns
+corrections: likely dropouts, new patients from enrollment trends, and the approach of
+enrollment closing.
 
 **But accuracy is not the goal; stockouts and waste are.** See section 7 for how that turns
 into supply results.
@@ -383,6 +417,43 @@ into supply results.
 closed (from the model's tiny leftover new-patient prediction), which left about 75 extra kits
 per trial at sites at the end. The schedule rule adds no spare kits once enrollment closes;
 the ML rule was changed to match. Found on tuning trials, not scoring trials.
+
+### Rule 6: Schedule + Bayesian (Gamma-Poisson)
+
+**In words:** exactly the schedule rule, but the spare kits for new patients come from a
+proper statistical estimate of each site's own enrollment pace, instead of "average of the
+last 8 weeks".
+
+**What "Bayesian Gamma-Poisson" means here** (the published standard for enrollment
+forecasting, e.g. Anisimov & Fedorov, 2007):
+1. **Before a site has data**, assume its pace looks like a typical site's. This starting
+   belief (the "prior") is a Gamma distribution fitted on the training trials: average 0.098
+   patients per week, with a wide spread (many slow sites, a few fast).
+2. **Each week, update the belief** with what the site has actually enrolled, allowing for
+   its ramp-up. A site with 0 patients after 30 weeks is believed to be slow (about 0.025 per
+   week); a site with 6 is believed to be fast (about 0.2 per week). New sites lean on the prior.
+3. **Forecast new patients** over the coming weeks as a full probability distribution
+   (negative binomial), and keep enough spare kits to cover **95%** of the likely outcomes.
+
+```
+cover     = shipping weeks + 1
+scheduled = kits planned in the next `cover` weeks for patients on treatment now
+pace      = Gamma(0.84 + site patients so far, 8.58 + site exposure weeks so far)
+spare     = 95% cap on new patients for this arm in the next `cover` weeks,
+            at least 2 while enrolling; 0 once enrollment closes
+target    = scheduled + spare
+```
+
+**Where it should help:** new sites (little history, the prior fills the gap) and busy or
+bursting sites (the 95% cap rises with the site's own record).
+**Where it cannot help:** quiet and stumbling sites still keep the floor of 2 spare kits,
+same as the schedule rule, so its estimate of "this site is slow" does not reduce their stock.
+
+**Honest test:** the generator adds a country effect, pace drift, and bursts that this model
+does not assume, so it is forecasting data it does not perfectly match.
+
+The prior is fitted by `python -m sim.fit_prior` (on the ML training trials, never the
+scoring trials).
 
 ### Ideas not built (kept for discussion)
 - **Fewer, bigger forecast shipments:** only ship when at least N kits are needed.
@@ -407,124 +478,133 @@ zero, the difference is real, not luck of the draw.
 
 ---
 
-## 7. Results so far (200 trials, per trial averages)
+## 7. Results (200 trials, per trial averages)
 
-| | Min/max | Tuned min/max | Forecast | Schedule | ML |
-|---|---|---|---|---|---|
-| Kits short | 296 | 8.2 | 7.7 | **2.7** | 3.3 |
-| Kits expired | 264 | 552 | **107** | 112 | 112 |
-| Kits left at end | 555 | 1,099 | 323 | 83 | **82** |
-| Kits shipped | 6,450 | 7,570 | 6,350 | 6,120 | **6,119** |
-| Shipments | **1,625** | 2,445 | 3,519 | 3,461 | 3,485 |
-| Avg kits at sites | 484 | 984 | 296 | 220 | **217** |
+Current model: visit windows, enrollment realism, run to the last visit, both arms in one box.
 
-Differences vs tuned min/max, with 95% ranges, are printed by `python -m sim.run`.
+| | Min/max | Tuned min/max | Forecast | Schedule | Schedule + Bayesian | ML |
+|---|---|---|---|---|---|---|
+| Kits short | 293 | 8.2 | 10.3 | **7.1** | 8.0 | 7.8 |
+| Kits expired | 532 | 1,089 | 220 | 189 | **188** | **188** |
+| Kits left at close-out | 378 | 697 | 201 | **30** | **30** | **30** |
+| Kits shipped | 6,757 | 7,918 | 6,551 | 6,352 | **6,351** | **6,351** |
+| Shipments (boxes) | **1,389** | 2,502 | 3,429 | 3,633 | 3,656 | 3,669 |
+| Avg kits at sites | 491 | 985 | 292 | 191 | **189** | **189** |
 
-**What it says:**
-- The plain min/max runs short a lot, mostly at busy sites far from the depot.
-- Tuned min/max fixes the stockouts by holding much more stock, so it wastes much more.
-- The forecast rule matches tuned min/max on stockouts (no real difference) with 70% less
-  stock and 80% less waste, but sends 44% more boxes.
-- The schedule rule is best on service: about a third of the stockouts of tuned min/max or
-  forecast (95% range excludes zero). It also holds the least stock, ships the fewest kits,
-  and leaves the fewest kits behind, because it knows which patients are near the end of
-  treatment. Its expired kits are about the same as forecast.
-- The ML rule lands almost exactly on the schedule rule, but slightly worse on stockouts:
-  +0.66 kits short per trial (95% range +0.54 to +0.78), with 1.4% less stock and 0.7% more
-  boxes. See "Did ML win?" below.
-- All three forecast-type rules send about 40% more boxes than tuned min/max. Which matters
-  more, kits or boxes, depends on drug cost vs shipping cost, which this project does not model.
+About 6,140 kits are needed per trial. Differences vs tuned min/max, with 95% ranges, are
+printed by `python -m sim.run`.
 
-### Did ML win?
+### What it says
+- **Plain min/max** runs short a lot (about 5% of kits needed), mostly at busy sites far from
+  the depot.
+- **Tuned min/max** fixes that by holding about twice the stock, and loses about 1 in 7 kits it
+  ships to expiry (1,089 expired of 7,918 shipped).
+- **The schedule rule matches tuned min/max on stockouts** (7.1 vs 8.2 kits short; the 95%
+  range of the difference, -3.1 to +0.8, includes zero) **with 81% less stock, 83% fewer expired
+  kits, and almost nothing left at close-out** (30 vs 697). It sends about 45% more boxes.
+- **Rolling forecast** sits in between: little stock, but more stockouts than the schedule
+  rule because it only looks backwards.
+- **Schedule + Bayesian and ML** both land almost exactly on the schedule rule, slightly worse
+  on stockouts (see below).
+- All forecast-type rules send far more boxes than min/max. Which matters more, kits or boxes,
+  depends on drug cost vs shipping cost, which this project does not model.
 
-**No.** On these trials, the ML rule does not beat the plain-math schedule rule. It is a far
-better *forecast* (Poisson deviance 0.16 vs 0.94), but that does not turn into fewer stockouts:
+### Did ML or the Bayesian rule win?
 
-| ML minus schedule | Base | Stall | Surge |
+**No.** Both are very slightly worse than the plain schedule rule on stockouts, with about
+1.4% less stock and the same waste:
+
+| Difference vs schedule rule | Kits short per trial | 95% range | Avg kits at sites |
 |---|---|---|---|
-| Kits short per trial | +0.66 | +0.70 | +1.55 |
-| 95% range | +0.54 to +0.78 | +0.57 to +0.84 | +1.33 to +1.77 |
-| Avg kits at sites | -3.1 (-1.4%) | -3.1 (-1.3%) | -3.7 (-1.8%) |
+| ML, base | +0.71 | +0.55 to +0.87 | -2.5 |
+| ML, surge | +1.60 | +1.35 to +1.86 | -3.1 |
+| Schedule + Bayesian, base | +0.89 | +0.74 to +1.04 | -2.6 |
+| Schedule + Bayesian, surge | +1.73 | +1.50 to +1.96 | -3.1 |
 
 Why, in plain terms:
-1. **Most demand is already known.** 87% of what the model learned comes from the visit
-   schedule, which the schedule rule uses directly. There is little left for ML to add.
-2. **Better average, thinner cushion.** The model correctly expects some patients to drop out,
-   so it books slightly fewer kits. But when a patient it expected to drop out shows up anyway,
-   the site is a kit short. Being right on average is not the same as covering the bad weeks.
-3. **Surges hurt it most** (+1.55): it was trained only on normal enrollment and never saw a
-   surge, so it under-predicts new patients during one.
+1. **Most demand is already known.** Most kits go to patients already on treatment, on planned
+   visits. The schedule rule uses that directly. ML and the Bayesian model only improve the
+   small remaining part (new patients, dropouts).
+2. **The floor of 2 spare kits makes most of the decisions.** At most sites, all three rules
+   end up keeping the same 2 spare kits, so their better estimates rarely change an order.
+3. **Better average, thinner cushion.** ML expects some patients to drop out, and the Bayesian
+   model often expects fewer new patients than the simpler rule's cushion allows for. Both
+   therefore hold slightly less stock, and occasionally that is one kit too few.
+4. **Surges hurt them most.** Neither was set up for a surge: ML never saw one in training,
+   and the Bayesian model assumes each site has a steady pace.
 
 What this does and does not show:
-- It shows that a schedule-aware rule with a sensible cushion is very hard to beat, and that
-  forecast accuracy alone is the wrong yardstick for resupply.
-- It does not show ML is useless. ML holds slightly less stock, so a fair verdict compares the
-  two at *equal* stock levels. The dashboard's safety-level knob (low / normal / high) will
-  show both rules' full trade-off curves, which answers that properly.
-- Real enrollment and dropout patterns are messier than our generator. ML could matter more
-  there, and less (circular validation, scope section 9).
+- It shows a schedule-aware rule with a sensible cushion is very hard to beat, and that a more
+  accurate forecast is not the same as fewer stockouts.
+- It does not show ML or Bayesian methods are useless. They hold slightly less stock, so the
+  fair verdict compares the rules at *equal* stock. The dashboard's safety-level knob will
+  show each rule's full trade-off line, which answers that properly.
+- With real data the picture could change (see `docs/real_world_blueprint.md`, not in git):
+  site history across many trials gives the Bayesian model a much better prior than one
+  pooled guess, and dropout patterns are richer than our generator's.
 
-**Known caveat:** the forecast rule learns from demand made by our own generator, so it may
-look better here than it would on messier real-world enrollment. The stress test (section 8)
-checks this.
+### What changed when the model got more realistic
+Before visit windows, enrollment realism, and running to the last visit, the schedule rule
+looked much stronger: about a third of tuned min/max's stockouts (2.7 vs 8.2 kits short).
+With realistic visits it is level on stockouts instead. Its stock and waste advantage held up,
+and grew once close-out was counted (tuned min/max leaves about 700 kits at sites at the end).
+The earlier numbers overstated the schedule rule, as expected.
+
+**Known caveat:** all rules are tested on data from our own generator, so results hold
+"under these assumptions" (scope section 9).
 
 ---
 
 ## 8. Stress test: surges and stalls
 
 ### What
-Real enrollment does not follow a smooth pattern. To check that the results above are not
-just the forecast rule "knowing" our generator, we hit the same 200 trials with shocks that
-no rule was set up for:
+Real enrollment does not follow a smooth pattern. On top of the built-in realism (section 3),
+the same 200 trials are hit with shocks that no rule was set up for:
 
 | Scenario | What happens |
 |---|---|
-| Base | Normal trial, no shock (the results in section 7). |
+| Base | No shock (the results in section 7). |
 | Surge | 30% of sites suddenly enroll at 3x their pace for 12 weeks. |
 | Stall | 30% of sites suddenly enroll nobody for 16 weeks, then carry on. |
 
 ### How
 - The shock hits all chosen sites in the same week, somewhere between weeks 26 and 70.
-- A shocked trial is the base trial with the same seed plus the shock. Sites, opening dates,
-  and pace are identical; only enrollment during the shock changes. So "surge trial 7" vs
+- A shocked trial is the base trial with the same seed plus the shock, so "surge trial 7" vs
   "base trial 7" isolates the shock.
-- No rule is re-tuned. Tuned min/max keeps its base settings; the forecast rule keeps its formula.
+- No rule is re-tuned or retrained.
 
-### Results (200 trials per scenario, per trial averages)
+### Results (per trial averages)
 
-| | Scenario | Min/max | Tuned min/max | Forecast | Schedule | ML |
-|---|---|---|---|---|---|---|
-| Kits short | base | 296 | 8.2 | 7.7 | 2.7 | 3.3 |
-| | surge | 344 | 14.1 | 10.6 | 3.8 | 5.4 |
-| | stall | 291 | 9.3 | 8.0 | 2.9 | 3.6 |
-| Kits expired | base | 264 | 552 | 107 | 112 | 112 |
-| | surge | 267 | 556 | 111 | 117 | 116 |
-| | stall | 273 | 571 | 109 | 114 | 113 |
-| Shipments | base | 1,625 | 2,445 | 3,519 | 3,461 | 3,485 |
-| | surge | 1,616 | 2,427 | 3,477 | 3,421 | 3,447 |
-| | stall | 1,600 | 2,408 | 3,465 | 3,402 | 3,426 |
+| | Scenario | Min/max | Tuned min/max | Forecast | Schedule | Sched. + Bayes | ML |
+|---|---|---|---|---|---|---|---|
+| Kits short | base | 293 | 8.2 | 10.3 | 7.1 | 8.0 | 7.8 |
+| | surge | 320 | 12.4 | 13.4 | **8.3** | 10.0 | 9.9 |
+| | stall | 301 | 10.9 | 10.5 | **7.2** | 8.2 | 8.1 |
+| Kits expired | base | 532 | 1,089 | 220 | 189 | 188 | 188 |
+| | surge | 483 | 990 | 200 | 169 | 168 | 168 |
+| | stall | 575 | 1,178 | 238 | 204 | 204 | 204 |
+| Shipments | base | 1,389 | 2,502 | 3,429 | 3,633 | 3,656 | 3,669 |
+| | surge | 1,371 | 2,458 | 3,354 | 3,542 | 3,568 | 3,581 |
+| | stall | 1,399 | 2,520 | 3,453 | 3,660 | 3,684 | 3,696 |
 
 At the shocked sites only, during the shock and 8 weeks after:
 
-| | Kits needed | Min/max short | Tuned min/max short | Forecast short | Schedule short |
-|---|---|---|---|---|---|
-| Surge | 498 | 50.5 | 3.5 | 4.4 | 1.6 |
-| Stall | 230 | 6.0 | 0.2 | 0.4 | 0.2 |
+| | Kits needed | Min/max | Tuned min/max | Forecast | Schedule | Sched. + Bayes | ML |
+|---|---|---|---|---|---|---|---|
+| Surge (kits short) | 477 | 42.7 | 3.1 | 5.1 | **2.3** | 3.2 | 3.2 |
+| Stall (kits short) | 213 | 5.8 | 0.2 | 0.4 | 0.3 | 0.3 | 0.3 |
 
 ### What it says
-- **The conclusions from section 7 hold under both shocks.** Forecast and tuned min/max give
-  about the same service; forecast uses far less stock and wastes far less; forecast ships
-  more boxes.
-- In the surge, forecast runs short slightly less than tuned min/max over the whole trial
-  (10.6 vs 14.1; the 95% range excludes zero). At the surging sites themselves the two are
-  within one kit of each other.
-- **These shocks turned out to be mild.** Both well-set rules absorb them. Two reasons:
-  1. Most kits go to patients already on treatment (a kit every 4 weeks), and those visits
-     are not affected by an enrollment shock. A surge only adds first kits.
-  2. Total enrollment is fixed at 500, so a surge just finishes enrollment sooner.
-- So this test shows the forecast rule's advantage is not fragile to enrollment shocks of
-  this size. It does **not** show how either rule behaves under harsher disruption (bigger or
-  longer surges, a surge concentrated in the far region, shipping delays).
+- **Under shocks, the schedule rule pulls ahead of tuned min/max on stockouts:** surge 8.3 vs
+  12.4 kits short (95% range of the difference -6.9 to -1.4), stall 7.2 vs 10.9 (-6.2 to -1.2).
+  Fixed min/max levels were set for normal enrollment; the schedule rule adapts.
+- Its stock and waste advantage holds in every scenario.
+- ML and Bayesian stay just behind the schedule rule, by about 1-2 kits, most in the surge.
+- Stalls barely hurt anyone: a site that stops enrolling still has stock for its existing
+  patients. The waste goes up slightly instead (kits waiting for patients who do not come).
+- The shocks are still fairly mild for well-set rules, because most kits go to patients
+  already on treatment and enrollment is capped at 500. Harsher tests (bigger or regional
+  surges, shipping delays) are not covered.
 
 ---
 
@@ -539,3 +619,12 @@ At the shocked sites only, during the shock and 8 weeks after:
 - Tuning trials never overlap scoring trials.
 - Shocks only touch the chosen sites, only inside the shock window; stalled sites enroll nobody during the stall.
 - A shocked trial has the same sites as the base trial with the same seed.
+- Visits follow the cycle-based windows: planned one cycle after the previous actual visit,
+  shifted at most one week, missed visits carry no kit; shift and miss rates match the settings.
+- With no shifts and no misses, what the schedule-type rules know equals the real future visits exactly.
+- Country effects are shared within a country; bursts make weeks lumpier; drift and bursts leave
+  the average pace unchanged.
+- Every trial runs to its last visit.
+- When a box goes to a site, every arm in it ends at or above its target, and topping up never adds a box.
+- The Bayesian maths matches a reference implementation, the prior fit recovers a known
+  distribution, and the Bayesian and ML rules never peek ahead.

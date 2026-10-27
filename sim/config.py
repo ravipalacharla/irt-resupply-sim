@@ -16,7 +16,8 @@ DB_URL = os.environ.get("IRT_SIM_DB_URL", "postgresql+psycopg2:///irt_sim")
 
 # --- Trial ---
 STUDY_START = date(2027, 1, 4)   # week 0 (a Monday)
-TRIAL_WEEKS = 156                # 3 years simulated; anything later is cut off
+TRIAL_WEEKS = 260                # max horizon (5 years). Each trial is simulated until its
+                                 # last patient's last visit; the generator checks it fits.
 ENROLL_TARGET = 500              # enrollment stops once this many patients are in
 ARMS = {"A": 0.5, "B": 0.5}      # arm -> share of patients (1:1)
 
@@ -38,9 +39,20 @@ RAMP_UP_WEEKS = 12        # weeks from opening to full pace (straight-line ramp)
 STUMBLE_SHARE = 0.18      # share of sites that never really get going
 STUMBLE_FACTOR = 0.1      # their pace is cut to this fraction
 
+# --- Enrollment realism (things a Gamma-Poisson forecaster does not assume) ---
+COUNTRY_EFFECT_SD = 0.3   # sites in a country share a pace multiplier (log-normal, average 1)
+PACE_DRIFT_SD = 0.03      # each site's pace wanders week to week (log random walk, no upward bias)
+BURST_PROB = 0.05         # share of site-weeks with a burst of referrals...
+BURST_FACTOR = 4.0        # ...enrolling at this multiple of the usual pace; other weeks are
+                          # scaled down slightly so the long-run average pace is unchanged
+
 # --- Patients and visits ---
-VISIT_INTERVAL_WEEKS = 4          # dispensing visit every 4 weeks, starting at enrollment
+VISIT_INTERVAL_WEEKS = 4          # one treatment cycle; a kit is dispensed at each cycle start
 KITS_PER_VISIT = 1
+# Cycle-based visit windows: each cycle is counted from the previous ACTUAL visit, so delays
+# add up. Shift of each visit vs its planned week: one week early / on time / one week late.
+VISIT_SHIFT_PROBS = {-1: 0.15, 0: 0.70, 1: 0.15}
+MISSED_VISIT_PROB = 0.02          # visit skipped: no kit; next cycle counted from the planned week
 MEDIAN_WEEKS_ON_TREATMENT = 40    # half of patients stop (any reason) before this
 MAX_WEEKS_ON_TREATMENT = 104      # protocol maximum
 
@@ -60,7 +72,7 @@ MINMAX_MAX = 5    # ...and top back up to this
 # the scoring trials (seeds 0..N-1 in sim.run). Re-run the tuner if other settings change.
 TUNING_SEED_START = 10_000
 TUNING_TRIALS = 30
-MINMAX_TUNED = {"North America": (4, 5), "Europe": (6, 8), "Asia-Pacific": (10, 15)}
+MINMAX_TUNED = {"North America": (4, 5), "Europe": (8, 10), "Asia-Pacific": (9, 12)}
 
 # --- Forecast reorder rule (per site, per arm) ---
 FORECAST_WINDOW_WEEKS = 8   # average use over the last 8 weeks
@@ -93,6 +105,12 @@ ML_PARAMS = {
 }
 ML_MAX_ROUNDS = 2000
 ML_EARLY_STOP_ROUNDS = 50         # stop when held-out error has not improved for this many rounds
+
+# --- Bayesian Gamma-Poisson reorder rule (schedule + Bayesian new-patient forecast) ---
+# Prior on a site's steady pace (patients/week) ~ Gamma(alpha, beta), mean alpha/beta.
+# Fitted by `python -m sim.fit_prior` on the ML training trials; paste its output here.
+BAYES_PRIOR = (0.8394, 8.5784)    # fitted: mean 0.098 patients/week, shape 0.84
+BAYES_QUANTILE = 0.95             # spare kits cover 95% of likely new-patient counts
 
 
 # --- Stress-test scenarios: enrollment shocks the rules were not set up for ---

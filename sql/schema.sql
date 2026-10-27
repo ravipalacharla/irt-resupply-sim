@@ -55,10 +55,12 @@ CREATE TABLE IF NOT EXISTS visit (
     trial_id    integer NOT NULL,
     patient_id  integer NOT NULL,
     arm         text    NOT NULL,                      -- copy of patient.arm, for easy per-arm demand
-    visit_num   integer NOT NULL,
-    week        integer NOT NULL,
-    visit_date  date    NOT NULL,
-    kits        integer NOT NULL,
+    visit_num     integer NOT NULL,
+    week          integer NOT NULL,                    -- actual week (planned week if missed)
+    planned_week  integer NOT NULL,                    -- previous actual visit + cycle length
+    missed        boolean NOT NULL,                    -- skipped: no kit dispensed
+    visit_date    date    NOT NULL,
+    kits          integer NOT NULL,
     PRIMARY KEY (trial_id, patient_id, visit_num),
     FOREIGN KEY (trial_id, patient_id) REFERENCES patient ON DELETE CASCADE
 );

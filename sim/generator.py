@@ -10,6 +10,11 @@ import pandas as pd
 from sim import config as c
 
 
+def trial_end_week(trial):
+    """First week after the last visit: the trial is simulated up to here (close-out included)."""
+    return int(trial["visit"]["week"].max()) + 1
+
+
 def week_to_date(weeks):
     # Works on a single int or a pandas Series of ints.
     return pd.Timestamp(c.STUDY_START) + pd.to_timedelta(weeks * 7, unit="D")
@@ -20,8 +25,11 @@ def make_sites(rng):
     for region, countries in c.REGIONS.items():
         for country, n_sites in countries.items():
             approval = int(rng.integers(c.COUNTRY_APPROVAL_WEEKS[0], c.COUNTRY_APPROVAL_WEEKS[1] + 1))
+            # Log-normal with mean 1: exp(N(-sd^2/2, sd)).
+            country_factor = rng.lognormal(-c.COUNTRY_EFFECT_SD ** 2 / 2, c.COUNTRY_EFFECT_SD)
             for _ in range(n_sites):
-                rows.append({"region": region, "country": country, "country_approval_week": approval})
+                rows.append({"region": region, "country": country, "country_approval_week": approval,
+                             "country_factor": country_factor})
     sites = pd.DataFrame(rows)
     n = len(sites)
 
@@ -31,6 +39,7 @@ def make_sites(rng):
     # Gamma(shape, scale) has mean shape*scale, so scale = mean/shape.
     pace = rng.gamma(c.SITE_PACE_SHAPE, c.SITE_PACE_MEAN / c.SITE_PACE_SHAPE, n)
     stumbling = rng.random(n) < c.STUMBLE_SHARE
+    pace = pace * sites.pop("country_factor").to_numpy()
     sites["pace_per_week"] = np.where(stumbling, pace * c.STUMBLE_FACTOR, pace)
     sites["is_stumbling"] = stumbling
 
@@ -59,7 +68,13 @@ def make_enrollment(rng, sites, mult):
     # [:, None] turns the column into shape (sites, 1) so it subtracts against every week.
     weeks_open = weeks[None, :] - sites["open_week"].to_numpy()[:, None]
     ramp = np.clip((weeks_open + 1) / c.RAMP_UP_WEEKS, 0, 1)
-    rate = sites["pace_per_week"].to_numpy()[:, None] * ramp * mult
+    # Pace drift: log random walk from opening week; -sd^2/2 per step keeps the average at 1.
+    steps = rng.normal(-c.PACE_DRIFT_SD ** 2 / 2, c.PACE_DRIFT_SD, weeks_open.shape)
+    drift = np.exp(np.cumsum(np.where(weeks_open >= 0, steps, 0.0), axis=1))
+    # Bursts: some weeks at BURST_FACTOR x pace, the rest scaled so the average is unchanged.
+    calm = (1 - c.BURST_PROB * c.BURST_FACTOR) / (1 - c.BURST_PROB)
+    burst = np.where(rng.random(weeks_open.shape) < c.BURST_PROB, c.BURST_FACTOR, calm)
+    rate = sites["pace_per_week"].to_numpy()[:, None] * ramp * mult * drift * burst
     counts = rng.poisson(rate)
 
     # Stop at target: find the week the running total crosses it, zero everything after,
@@ -103,14 +118,37 @@ def make_patients(rng, sites, counts):
     })
 
 
-def make_visits(patients):
+def make_visits(rng, patients):
+    """Cycle-based visits with windows. One row per planned visit (missed ones have kits = 0).
+
+    First visit is at enrollment. Each later visit is planned VISIT_INTERVAL_WEEKS after the
+    previous actual visit (or after the planned week of a missed one), then shifted early/late
+    by VISIT_SHIFT_PROBS. Visits stop at the patient's end of treatment or the protocol maximum.
+    """
+    shifts = np.array(list(c.VISIT_SHIFT_PROBS))
+    cum = np.cumsum(list(c.VISIT_SHIFT_PROBS.values()))
     rows = []
     for p in patients.itertuples():
-        for i, week in enumerate(range(p.enroll_week, p.end_week, c.VISIT_INTERVAL_WEEKS)):
-            rows.append((p.patient_id, p.arm, i + 1, week))
-    visits = pd.DataFrame(rows, columns=["patient_id", "arm", "visit_num", "week"])
+        stop = min(p.end_week, p.enroll_week + c.MAX_WEEKS_ON_TREATMENT)
+        rows.append((p.patient_id, p.arm, 1, p.enroll_week, p.enroll_week, False))
+        anchor, n = p.enroll_week, 1
+        while True:
+            planned = anchor + c.VISIT_INTERVAL_WEEKS
+            actual = planned + int(shifts[np.searchsorted(cum, rng.random())])  # pick a shift
+            if actual >= stop:
+                break
+            n += 1
+            if rng.random() < c.MISSED_VISIT_PROB:
+                rows.append((p.patient_id, p.arm, n, planned, planned, True))
+                anchor = planned
+            else:
+                rows.append((p.patient_id, p.arm, n, actual, planned, False))
+                anchor = actual
+    visits = pd.DataFrame(rows, columns=["patient_id", "arm", "visit_num", "week", "planned_week", "missed"])
     visits["visit_date"] = week_to_date(visits["week"])
-    visits["kits"] = c.KITS_PER_VISIT
+    visits["kits"] = np.where(visits["missed"], 0, c.KITS_PER_VISIT)
+    if visits["week"].max() >= c.TRIAL_WEEKS:
+        raise ValueError("TRIAL_WEEKS too short for this trial; raise it in config.py")
     return visits
 
 
@@ -128,6 +166,8 @@ def make_site_week(sites, counts, patients, visits):
             .groupby(["site_id", "week"])["kits"].sum())
     sw = sw.merge(kits.rename("kits_needed"), on=["site_id", "week"], how="left")
     sw["kits_needed"] = sw["kits_needed"].fillna(0).astype(int)
+    end = int(visits["week"].max()) + 1   # stop at the trial's last visit
+    sw = sw[sw["week"] < end].reset_index(drop=True)
     return sw[["site_id", "week", "week_start", "is_open", "enrolled", "kits_needed"]]
 
 
@@ -139,6 +179,6 @@ def generate_trial(rng, scenario="base", shock_rng=None):
     sites["shock_start_week"] = pd.array([start if h else None for h in hit], dtype="Int64")  # Int64 allows blanks (NULL)
     counts = make_enrollment(rng, sites, mult)
     patients = make_patients(rng, sites, counts)
-    visits = make_visits(patients)
+    visits = make_visits(rng, patients)
     site_week = make_site_week(sites, counts, patients, visits)
     return {"site": sites, "site_week": site_week, "patient": patients, "visit": visits}
