@@ -2,12 +2,16 @@
 
 **Synthetic data. Illustrative only.**
 
-Compares two reorder rules for shipping clinical trial kits to sites, on fully made-up trials:
+**Live dashboard:** https://ravipalacharla.github.io/irt-resupply-sim/
 
-- **min/max**: when a site drops below X kits, top it up to Y.
-- **forecast**: estimate the site's upcoming use and ship enough to cover it plus a cushion.
+Compares six reorder rules for shipping clinical trial kits to sites, on made-up trials:
+two fixed refill rules (min/max), a recent-use forecast, an expected-visits rule, and two
+versions of it that add a Bayesian site-pace estimate or a LightGBM model.
 
-Both rules run against the exact same simulated trials, across many random trials, and are scored on stockouts, expired kits, shipment count, and stock on hand.
+Every rule plays the exact same simulated trials (200 per setting, Monte Carlo) and is scored
+on kits short, kits expired, kits sitting at sites, and shipments. The dashboard shows one
+site week by week, with a safety dial and switches for shipping time, shelf life, enrollment
+speed and enrollment shocks. Plain-English write-up: `docs/how_it_works.md`.
 
 ## Setup (macOS)
 
