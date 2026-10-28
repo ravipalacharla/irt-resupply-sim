@@ -35,9 +35,12 @@ const state = {
   index: null, trial: null, runId: null, siteId: null, arm: null, rule: null, compare: null,
   week: Infinity,          // start on the full trial; Play replays it from week 0
   speed: 1,
+  view: "site",            // "site" (one site, week by week) or "about" (how it works)
+  summary: null,           // scores for all 200 trials of the current run
   settings: Object.fromEntries(Object.entries(SETTINGS).map(([k, s]) => [k, s.normal])),
 };
 const cache = {};          // trial files already downloaded, by run id
+const summaries = {};      // summary files already downloaded, by run id
 const $ = id => document.getElementById(id);
 // "no-cache" = always ask the server if the file changed (after a re-export the browser would
 // otherwise keep showing its old copy). Unchanged files come back as a tiny "not modified" reply.
@@ -167,14 +170,46 @@ function showWeek(w) {
   counters();
 }
 
+// Settings in words, for the notes under the charts.
+function settingsText() {
+  const run = state.index.runs.find(r => r.id === state.runId);
+  return run.knob === "normal" ? `normal, ${run.scenario_label.toLowerCase()}` : run.knob_label;
+}
+
+// One line under the headline: the picked rule against the compare rule over all 200 trials
+// (not just this site). Trial-by-trial difference, since both rules play the same trials.
+function trialsSentence() {
+  const fmt = d3.format(".1f");
+  const main = state.summary.rules[state.rule].kits_short;
+  const n = state.summary.trials;
+  const a = `<b>${ruleName(state.rule)}</b>`;
+  if (state.compare === "none") {
+    return `Across all ${n} trials (not just this site): ${a} averaged ${fmt(main.mean)} kits short per trial.`;
+  }
+  const other = state.summary.rules[state.compare].kits_short;
+  const diffs = main.per_trial.map((v, i) => v - other.per_trial[i]);
+  const mean = d3.mean(diffs), half = 1.96 * d3.deviation(diffs) / Math.sqrt(diffs.length);
+  const lo = mean - half, hi = mean + half;
+  const b = `<b>${ruleName(state.compare)}</b>`;
+  const start = `Across all ${n} trials (not just this site): ${a} had`;
+  if (lo > 0) return `${start} <b class="bad">${fmt(mean)} more</b> kits short per trial than ${b} (95% range ${fmt(lo)} to ${fmt(hi)} more).`;
+  if (hi < 0) return `${start} <b class="good">${fmt(-mean)} fewer</b> kits short per trial than ${b} (95% range ${fmt(-hi)} to ${fmt(-lo)} fewer).`;
+  return `Across all ${n} trials (not just this site): no clear difference in kits short between ${a} and ${b} ` +
+    `(${fmt(main.mean)} vs ${fmt(other.mean)} per trial).`;
+}
+
 function redraw() {
+  $("ruleLine").textContent = state.index.rules.find(r => r.code === state.rule).line;
+  if (state.view === "about") return;
+  $("runNote").textContent = `Showing example trial ${state.trial.trial}, one of the 200 simulated trials. ` +
+    `Settings: ${settingsText()}.`;
   const s = site();
   $("siteTitle").textContent = `${s.story} · ${s.country_name}`;
   $("siteSub").textContent = `${s.region} · opens week ${s.open_week} (${dateOf(s.open_week)}) · Arm ${state.arm}`;
-  $("ruleLine").textContent = state.index.rules.find(r => r.code === state.rule).line;
   seg($("armSeg"), Object.keys(s.arms).map(a => ({ value: a, label: `Arm ${a}` })), state.arm,
     v => { stop(); state.arm = v; redraw(); });
   headline();
+  $("trialsLine").innerHTML = trialsSentence();
   chart.draw(siteData());
   showWeek(state.week);
 }
@@ -204,15 +239,14 @@ async function loadRun(runId) {
   state.runId = runId;
   if (!cache[runId]) {
     const seed = state.index.detail_trials[0];
-    cache[runId] = await getJSON(`data/${runId}/trial_${seed}.json`);
+    [cache[runId], summaries[runId]] = await Promise.all([
+      getJSON(`data/${runId}/trial_${seed}.json`), getJSON(`data/${runId}/summary.json`)]);
   }
   state.trial = cache[runId];
+  state.summary = summaries[runId];
   if (!state.trial.sites.some(s => s.site_id === state.siteId)) state.siteId = state.trial.sites[0].site_id;
   if (!state.arm) state.arm = site().default_arm;
   state.week = Math.min(state.week, state.trial.end_week);
-  const run = state.index.runs.find(r => r.id === runId);
-  $("runNote").textContent = `Showing example trial ${state.trial.trial}, one of the 200 simulated trials. ` +
-    `Settings: ${run.knob === "normal" ? `normal, ${run.scenario_label.toLowerCase()}` : run.knob_label}.`;
   redraw();
 }
 
@@ -220,8 +254,10 @@ async function main() {
   state.index = await getJSON("data/runs.json");
   state.rule = state.index.default_rule;
   state.compare = state.index.compare_rule;
-  const first = await getJSON(`data/normal__base/trial_${state.index.detail_trials[0]}.json`);
+  const [first, firstSummary] = await Promise.all([
+    getJSON(`data/normal__base/trial_${state.index.detail_trials[0]}.json`), getJSON("data/normal__base/summary.json")]);
   cache.normal__base = first;
+  summaries.normal__base = firstSummary;
 
   // Open on the site where the dial makes the most difference.
   state.siteId = (first.sites.find(s => s.story === "Often runs short") || first.sites[0]).site_id;
@@ -257,6 +293,19 @@ async function main() {
     $("showPanel").hidden = show;
     redraw();  // the chart gets wider or narrower
   };
+  document.querySelectorAll("#tabs button").forEach(b => {
+    b.onclick = () => {
+      stop();
+      state.view = b.dataset.view;
+      document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
+      $("aboutView").hidden = state.view !== "about";
+      $("siteView").hidden = state.view !== "site";
+      $("runNote").hidden = state.view !== "site";
+      $("layout").classList.toggle("about", state.view === "about");  // settings do not apply here
+      redraw();
+    };
+  });
+  $("rulesTable").innerHTML = state.index.rules.map(r => `<tr><td>${r.name}</td><td>${r.line}</td></tr>`).join("");
   $("hidePanel").onclick = () => togglePanel(false);
   $("showPanel").onclick = () => togglePanel(true);
 

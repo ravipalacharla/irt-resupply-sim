@@ -9,7 +9,7 @@
 <body>
 <header>
   <h1>IRT Resupply Simulator</h1>
-  <p class="sub">Synthetic clinical trials. Every number here comes from a simulation, not real data.</p>
+  <p class="sub">Synthetic clinical trials. Every number here comes from a simulation.</p>
 </header>
 
 <div class="layout" id="layout">
@@ -19,11 +19,13 @@
       <button id="hidePanel" class="iconBtn" type="button" title="Hide settings">«</button>
     </div>
 
-    <label class="field">Site
-      <select id="siteSelect"></select>
-    </label>
-    <div class="field">Arm
-      <div class="seg" id="armSeg"></div>
+    <div id="siteFields">
+      <label class="field">Site
+        <select id="siteSelect"></select>
+      </label>
+      <div class="field">Arm
+        <div class="seg" id="armSeg"></div>
+      </div>
     </div>
 
     <label class="field">Reorder rule
@@ -47,8 +49,71 @@
   </aside>
 
   <main class="content">
-    <div class="contentHead">
+    <div class="tabsRow">
       <button id="showPanel" class="iconBtn" type="button" title="Show settings" hidden>☰ Settings</button>
+      <div class="tabs" id="tabs">
+        <button type="button" data-view="site" class="on">One site</button>
+        <button type="button" data-view="about">How it works</button>
+      </div>
+    </div>
+
+    <div id="aboutView" class="about" hidden>
+      <h2>How it works</h2>
+      <p>In clinical supply the same question comes up every week: how many kits should go to each site,
+        and when? Send too few and a patient shows up with no kit. Send too many and they sit on a shelf
+        until they expire.</p>
+      <p>I built this to compare a few <b>reorder rules</b> (the logic that decides when a site gets a
+        shipment and how big it is). None of it is real trial data. I made the trials up so every rule
+        could be tested on exactly the same ones.</p>
+
+      <h3 class="aboutHead">How a run works</h3>
+      <ol class="aboutList">
+        <li><b>Make up a trial.</b> 78 sites, 10 countries, 500 patients, two arms. A patient gets a kit
+          at enrollment and then one every 4 weeks. I put the messy parts in too: sites open late, start
+          slow, some stall, visits slip a week either way, and now and then one gets missed.</li>
+        <li><b>Play it week by week under each rule.</b> Same patients, same visits. Only the shipping
+          changes.</li>
+        <li><b>Do it again, 200 times,</b> with a different made-up trial each time. That's the Monte Carlo
+          part. One trial can be lucky. 200 can't all be.</li>
+        <li><b>Count what happened:</b> kits short, kits expired, kits sitting on shelves, shipments sent.</li>
+      </ol>
+
+      <h3 class="aboutHead">The rules</h3>
+      <p>Six of them, from the simplest to the one with machine learning:</p>
+      <table class="rulesTable" id="rulesTable"></table>
+
+      <h3 class="aboutHead">About the machine learning</h3>
+      <p>The last rule uses LightGBM, a tree-based model that's common in demand forecasting. I trained
+        it on 40 separate made-up trials to predict what each site will need over the next 1 to 8 weeks.</p>
+      <p>I expected it to win. It didn't. It lands about where Expected visits does, a little worse
+        (roughly 1 more kit short per trial). Looking back, that makes sense: most kits go to patients
+        already on treatment, and their visits are already on the calendar. There isn't much left for a
+        model to guess.</p>
+
+      <h3 class="aboutHead">The dial and switches</h3>
+      <p>Each position was run ahead of time (200 trials each), which is why the page doesn't need a
+        server. I didn't re-tune the rules for each setting, on purpose. I wanted to see how they hold
+        up when things don't go to plan.</p>
+      <ul class="aboutList">
+        <li><b>Safety cushion:</b> how many extra kits a rule keeps around. Less means leaner shelves and
+          more stockouts.</li>
+        <li><b>Shipping time +1 week:</b> every shipment takes a week longer.</li>
+        <li><b>Shelf life:</b> kits last 12, 24 (normal) or 36 months.</li>
+        <li><b>Enrollment speed:</b> sites enroll 30% slower or faster than planned.</li>
+        <li><b>Enrollment shock:</b> a surge (30% of sites suddenly enroll 3 times faster for 12 weeks) or
+          a stall (30% of sites stop enrolling for 16 weeks).</li>
+      </ul>
+
+      <h3 class="aboutHead">What it doesn't do</h3>
+      <ul class="aboutList">
+        <li>It's all made up, so use it to compare rules, not to forecast a real study.</li>
+        <li>One kit type per arm. One depot, and it never runs out. Shipping times are fixed by region.</li>
+        <li>No costs. Whether fewer kits beats fewer shipments depends on the drug and the couriers.</li>
+      </ul>
+    </div>
+
+    <div id="siteView">
+    <div class="contentHead">
       <div>
         <h2 id="siteTitle"></h2>
         <p id="siteSub" class="sub"></p>
@@ -56,6 +121,7 @@
     </div>
 
     <div id="headline" class="headline"></div>
+    <p id="trialsLine" class="trialsLine"></p>
 
     <div id="chart" class="chart"></div>
     <div id="legend" class="legend"></div>
@@ -69,6 +135,7 @@
     </div>
 
     <div id="counters" class="counters"></div>
+    </div>
     <p id="runNote" class="note"></p>
   </main>
 </div>

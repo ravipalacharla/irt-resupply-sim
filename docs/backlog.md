@@ -20,3 +20,8 @@ Out of v1 scope. Move here instead of building.
   knobs that re-run the simulation need cloud compute (Azure Functions / Container Apps) = v2
 - Forward planning mode: take one trial's history up to "today" and Monte Carlo its future to
   predict stockout dates per real site (a planning tool, not a rule comparison)
+- Dashboard deep-dive screens (built or planned, then left out on 2026-10-28 to keep the demo
+  simple; the data is already exported in `web/data/<run>/summary.json` and `heatmap.json`):
+  - "All 200 trials" tab: one bar per rule for kits short / expired / at sites / shipments,
+    with 95% ranges (only the kits-short sentence was kept, under the site headline)
+  - Country x week grid: % of trials where a site in the country ran short

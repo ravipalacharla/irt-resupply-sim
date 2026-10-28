@@ -119,3 +119,29 @@ h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .6px
   .panel { position: static; }
   header { padding-left: 16px; padding-right: 16px; }
 }
+
+/* Tabs. */
+.tabsRow { display: flex; align-items: center; gap: 12px; margin: -4px 0 12px; border-bottom: 1px solid var(--line); }
+.tabs { display: flex; gap: 4px; }
+.tabs button { border: 0; background: none; padding: 8px 14px; font-size: 14px; color: var(--muted); cursor: pointer;
+  border-bottom: 3px solid transparent; margin-bottom: -1px; }
+.tabs button.on { color: var(--brand); font-weight: 600; border-bottom-color: var(--brand); }
+
+/* Line under the headline: all 200 trials. */
+.trialsLine { margin: 2px 0 6px; font-size: 13px; color: var(--muted); }
+.trialsLine b { color: var(--text); }
+.trialsLine b.good { color: var(--good); }
+.trialsLine b.bad { color: var(--bad); }
+
+/* How it works. Settings panel is hidden on this tab. */
+.layout.about { grid-template-columns: minmax(0, 1fr); }
+.layout.about .panel, .layout.about #showPanel { display: none; }
+.about { max-width: 900px; }
+.about p, .about li { font-size: 14px; line-height: 1.6; }
+.aboutHead { margin: 22px 0 6px; font-size: 13px; }
+.rulesTable { border-collapse: collapse; width: 100%; }
+.rulesTable td { padding: 6px 10px; border-bottom: 1px solid #eee; vertical-align: top; font-size: 13px; }
+.rulesTable td:first-child { font-weight: 600; white-space: nowrap; color: var(--main); }
+.aboutList { padding-left: 20px; margin: 6px 0; }
+.aboutList li { margin-bottom: 4px; }
+@media (max-width: 600px) { .rulesTable td:first-child { white-space: normal; } }

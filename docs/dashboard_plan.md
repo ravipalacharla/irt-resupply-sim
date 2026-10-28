@@ -86,3 +86,12 @@ picture of what the shelf looks like over time under that rule.
   personal step chart: line drawing itself week by week, totals counting up as it plays,
   shortages and expiries drawn below zero, hover line with a tooltip. Added: stockout dots and
   a "First stockout: week X" flag, the rule's target line, a compare rule in grey, a week slider.
+- **Screens 1 and 2 left out (2026-10-28):** the "All 200 trials" bar tab was built and then
+  removed, and the country x week grid was not built. Both lead into deep-dive analysis with
+  many options, which is too much for a demo. Kept: one line under the site headline,
+  "Across all 200 trials (not just this site): <rule> had N fewer/more kits short per trial than
+  <compare rule> (95% range ...)" (trial-by-trial difference). Both screens are in the backlog.
+- **"How it works" tab:** plain-English page: the problem, 4 steps (make up a trial, play it
+  under each rule, repeat 200 times = Monte Carlo, score), the 6 rules, where machine learning
+  fits (and that it does not beat Expected visits), what the dial and switches do, limits.
+  The settings panel is hidden on this tab.
