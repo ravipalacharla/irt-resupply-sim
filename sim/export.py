@@ -1,15 +1,18 @@
 """Write the dashboard's data files (static JSON) from the database.
 
-    python -m sim.export
+    python -m sim.export              # 1 example trial per run for the site chart (default)
+    python -m sim.export --trials 3   # more example trials (bigger files)
 
 Output in web/data/:
   runs.json                  what the knobs can pick, rule names and descriptions, defaults
   <run>/summary.json         Screen 1: each rule's scores, average + 95% range + every trial's value
   <run>/heatmap.json         Screen 2: % of trials where a site in each country ran short, per week
-  <run>/trial_<seed>.json    Screen 3: week-by-week shelf numbers for each site (a few trials only)
+  <run>/trial_<seed>.json    Screen 3: week-by-week shelf numbers for 6 "story" sites (example trials only)
 A <run> is one knob position + scenario, e.g. "normal__surge" or "shelf_12__base".
 """
+import argparse
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -52,6 +55,25 @@ KNOB_LABELS = {
     "enroll_faster": "Enrollment: faster",
 }
 SCENARIO_LABELS = {"base": "No shock", "surge": "Surge", "stall": "Stall"}
+COUNTRY_NAMES = {"US": "United States", "CA": "Canada", "DE": "Germany", "FR": "France", "ES": "Spain",
+                 "PL": "Poland", "GB": "United Kingdom", "JP": "Japan", "AU": "Australia", "KR": "South Korea"}
+
+# Screen 3 shows 6 "story" sites, not all 78. Picked once from the first example trial and used in
+# every run (the sites are the same in every run; only their supply differs). Per site + arm:
+#   need  = kits needed under Expected visits, normal settings, no shock (how busy the site is)
+#   short = kits short under the two default rules (Expected visits, Fixed refill by region),
+#           summed over all runs (how much the dial and switches change at this site)
+STORY_SQL = """
+SELECT i.site_id, s.country, s.region, s.open_week, s.is_stumbling, i.arm,
+       coalesce(sum(i.kits_needed) FILTER (WHERE t.knob = 'normal' AND t.scenario = 'base'
+                                           AND i.policy = 'schedule'), 0)                AS need,
+       coalesce(sum(i.kits_short) FILTER (WHERE i.policy IN ('schedule', 'minmax_tuned')), 0) AS short
+FROM inventory_week i
+JOIN trial t USING (trial_id)
+JOIN site  s ON s.trial_id = t.trial_id AND s.site_id = i.site_id
+WHERE t.seed = :seed
+GROUP BY 1, 2, 3, 4, 5, 6
+"""
 
 
 def run_id(knob, scenario):
@@ -101,7 +123,32 @@ def heatmap(conn, knob, scenario, countries):
     return out
 
 
-def trial_timeline(conn, knob, scenario, seed):
+def story_sites(conn, seed):
+    """[(site_id, arm, story), ...]: 6 sites that each show something different."""
+    r = pd.read_sql(text(STORY_SQL), conn, params={"seed": seed})
+    # One row per site, keeping the arm with more shortages (then the busier arm).
+    r = r.sort_values(["short", "need"], ascending=False).groupby("site_id").head(1)
+    picks = []
+
+    def pick(story, rows, by):
+        rows = rows[~rows["site_id"].isin([p[0] for p in picks])]
+        used = r[r["site_id"].isin([p[0] for p in picks])]["country"]
+        if (~rows["country"].isin(used)).any():
+            rows = rows[~rows["country"].isin(used)]  # prefer a country not shown yet
+        if len(rows):
+            row = rows.sort_values(by, ascending=False).iloc[0]
+            picks.append((int(row.site_id), row.arm, story))
+
+    pick("Busy site", r, ["need"])
+    pick("Often runs short", r, ["short", "need"])
+    pick("Far away (longest shipping)", r[r["region"] == "Asia-Pacific"], ["short", "need"])
+    pick("Slow site", r[r["is_stumbling"] & (r["need"] > 0)], ["need"])
+    pick("Opens late", r[r["need"] > 0], ["open_week", "short"])
+    pick("Steady site", r, ["need"])
+    return picks
+
+
+def trial_timeline(conn, knob, scenario, seed, stories):
     t = conn.execute(text("SELECT trial_id FROM trial WHERE knob = :k AND scenario = :s AND seed = :d"),
                      {"k": knob, "s": scenario, "d": seed}).scalar()
     inv = pd.read_sql(text("SELECT * FROM inventory_week WHERE trial_id = :t ORDER BY site_id, arm, policy, week"),
@@ -110,10 +157,14 @@ def trial_timeline(conn, knob, scenario, seed):
         return None  # this trial's week-by-week rows were not kept
     sites = pd.read_sql(text("SELECT * FROM site WHERE trial_id = :t ORDER BY site_id"), conn, params={"t": t})
     out = {"trial": seed, "end_week": int(inv["week"].max()), "sites": []}
-    for s in sites.itertuples():
-        site = {"site_id": int(s.site_id), "country": s.country, "region": s.region,
-                "open_week": int(s.open_week), "stumbling": bool(s.is_stumbling), "arms": {}}
-        for arm, ga in inv[inv["site_id"] == s.site_id].groupby("arm"):
+    sites = sites.set_index("site_id")
+    for site_id, default_arm, story in stories:
+        s = sites.loc[site_id]
+        site = {"site_id": site_id, "story": story, "country": s.country,
+                "country_name": COUNTRY_NAMES.get(s.country, s.country), "region": s.region,
+                "open_week": int(s.open_week), "stumbling": bool(s.is_stumbling),
+                "default_arm": default_arm, "arms": {}}
+        for arm, ga in inv[inv["site_id"] == site_id].groupby("arm"):
             site["arms"][arm] = {}
             for code, g in ga.groupby("policy"):
                 active = g[(g["on_hand"] > 0) | (g["in_transit"] > 0) | (g["kits_needed"] > 0) | g["target"].notna()]
@@ -134,6 +185,10 @@ def trial_timeline(conn, knob, scenario, seed):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--trials", type=int, default=1, help="example trials per run for the site chart")
+    args = ap.parse_args()
+    shutil.rmtree(OUT, ignore_errors=True)  # start clean so no old files are left behind
     engine = get_engine()
     with engine.connect() as conn:
         runs = pd.read_sql(text("SELECT DISTINCT knob, scenario FROM trial"), conn)
@@ -144,15 +199,20 @@ def main():
             "default_rule": "schedule", "compare_rule": "minmax_tuned",
             "countries": countries, "runs": [], "detail_trials": [],
         }
+        stories = {}  # seed -> story sites, picked once per example trial
         for knob, scenario in done:
             rid = run_id(knob, scenario)
             write(OUT / rid / "summary.json", summary(conn, knob, scenario))
             write(OUT / rid / "heatmap.json", heatmap(conn, knob, scenario, [x["code"] for x in countries]))
             seeds = pd.read_sql(text("""
                 SELECT DISTINCT t.seed FROM trial t JOIN inventory_week i USING (trial_id)
-                WHERE t.knob = :k AND t.scenario = :s ORDER BY t.seed"""), conn, params={"k": knob, "s": scenario})
+                WHERE t.knob = :k AND t.scenario = :s ORDER BY t.seed LIMIT :n"""), conn,
+                params={"k": knob, "s": scenario, "n": args.trials})
             for seed in seeds["seed"]:
-                write(OUT / rid / f"trial_{seed}.json", trial_timeline(conn, knob, scenario, int(seed)))
+                if int(seed) not in stories:
+                    stories[int(seed)] = story_sites(conn, int(seed))
+                write(OUT / rid / f"trial_{seed}.json",
+                      trial_timeline(conn, knob, scenario, int(seed), stories[int(seed)]))
             index["runs"].append({"id": rid, "knob": knob, "knob_label": KNOB_LABELS[knob],
                                   "scenario": scenario, "scenario_label": SCENARIO_LABELS[scenario]})
             index["detail_trials"] = [int(x) for x in seeds["seed"]]

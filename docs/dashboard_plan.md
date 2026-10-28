@@ -66,3 +66,23 @@ picture of what the shelf looks like over time under that rule.
 ### Defaults
 - Picked rule: **Expected visits** (as few stockouts as any rule, far less waste).
 - Comparison line on screen 3: **Fixed refill by region** (closest to what most teams use today).
+
+## Decisions (2026-10-27, later)
+- **Site chart data:** one example trial per run (trial 0) instead of 5, and only 6 "story"
+  sites from it instead of 78 (busy, often runs short, far away, slow, opens late, steady;
+  one country each). Dashboard files went from 67 MB to about 2.5 MB (about 0.3 MB
+  compressed). Small enough to keep in git and host as a plain static folder (`web/`).
+  Screens 1-2 still use all 200 trials.
+- **Layout:** settings in a panel on the left that can be hidden; chart on the right.
+  Title color #00A1DF.
+- **Safety dial:** 3 positions (Less / Normal / More), the safety knob runs. A headline above
+  the chart shows each rule's first stockout (or "No stockout") and what it cost
+  (kits short, expired, average kits on the shelf, shipments).
+- **Other knobs:** small switch buttons (shipping time, shelf life, enrollment speed,
+  enrollment shock). One at a time: moving one puts the others back to Normal.
+- **Player:** Play/Pause, Replay, speed 1x/2x, click the chart to jump to a week. No slider.
+- Opens on the "Often runs short" site, where the dial makes the most difference.
+- **Step chart:** written fresh in D3 v7 (`web/js/stepChart.js`). Ideas taken from my earlier
+  personal step chart: line drawing itself week by week, totals counting up as it plays,
+  shortages and expiries drawn below zero, hover line with a tooltip. Added: stockout dots and
+  a "First stockout: week X" flag, the rule's target line, a compare rule in grey, a week slider.

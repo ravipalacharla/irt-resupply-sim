@@ -25,6 +25,7 @@ pytest -q
 python -m sim.train_ml             # train the ML model once (~30 s)
 caffeinate -s python -m sim.run --seeds 200 --plan dashboard --reset   # plug in, lid open (~5 h)
 python -m sim.export               # dashboard files -> web/data/
+cd web && python3 -m http.server 8000   # then open http://localhost:8000
 ```
 
 ## Accessing the database

@@ -74,9 +74,25 @@ of 200 trials, about 5 hours for the 10 dashboard runs. Database size after the 
 1.8 GB (week-by-week rows are kept for 5 trials per run; any other trial can be recreated
 exactly from its seed).
 
-**The dashboard files** (`python -m sim.export`) go to `web/data/`: about 67 MB in total, one
-folder per knob position. A browser only loads what it shows: about 0.05 MB for screens 1-2
-and about 0.08 MB (compressed) per site-chart trial.
+**The dashboard files** (`python -m sim.export`) go to `web/data/`: about 2.5 MB in total
+(about 0.3 MB once a web host compresses it), one folder per knob position. The site chart
+uses **one example trial per run** (trial 0, the same trial in every run, so moving a knob
+shows the same sites reacting) and only **6 "story" sites** from it, picked automatically:
+busy site, often runs short, far away (Asia-Pacific), slow site, opens late, steady site,
+each from a different country. The SQL that ranks the sites is `STORY_SQL` in
+`sim/export.py`. `python -m sim.export --trials 3` keeps more example trials. The export deletes and rewrites `web/data/` each time. A browser
+only loads what it shows: about 0.05 MB for screens 1-2 and about 0.08 MB for the site chart.
+
+**View the dashboard on your Mac.** Browsers will not load the data files from a page opened
+straight from disk, so start a small local web server:
+
+```zsh
+cd web
+python3 -m http.server 8000
+```
+
+Open http://localhost:8000 in a browser. Press `Ctrl+C` in the terminal to stop the server.
+The page is plain HTML, CSS and JavaScript (D3 v7 in `web/lib/`), with no build step.
 
 ---
 
