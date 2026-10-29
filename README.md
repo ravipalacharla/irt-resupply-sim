@@ -1,4 +1,4 @@
-# IRT Resupply Simulator
+# Clinical Resupply Simulator
 
 **Synthetic data. Illustrative only.**
 

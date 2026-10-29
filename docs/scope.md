@@ -1,4 +1,4 @@
-# IRT Resupply Simulator: Scope, Boundaries & Toolset
+# Clinical Resupply Simulator: Scope, Boundaries & Toolset
 
 Public portfolio project. Compares rules-based vs. forecast-driven clinical supply resupply on **fully synthetic** trial data.
 
